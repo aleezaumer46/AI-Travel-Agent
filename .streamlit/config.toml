@@ -1,0 +1,10 @@
+[theme]
+primaryColor = "#0F766E"
+backgroundColor = "#F7F4ED"
+secondaryBackgroundColor = "#E8F0EC"
+textColor = "#173F3A"
+font = "serif"
+
+[server]
+headless = true
+maxUploadSize = 10

@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local secrets
+.streamlit/secrets.toml
+
+# Runtime/generated data
+*.db
+*.sqlite
+*.sqlite3
+saved_models/*.pkl
+saved_models/*.pt
+data/vector_db/*
+!data/vector_db/.gitkeep
+
+# Local uploads and logs
+uploads/
+*.log
+.DS_Store
