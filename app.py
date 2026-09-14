@@ -8,7 +8,19 @@ import requests
 import streamlit as st
 from pathlib import Path
 
-from modules.database import destination_rows, favorite_rows, initialize_database, log_trip, save_favorite, save_transport_booking, transport_booking_rows
+from modules import database
+
+destination_rows = database.destination_rows
+favorite_rows = database.favorite_rows
+initialize_database = database.initialize_database
+log_trip = database.log_trip
+save_favorite = database.save_favorite
+def _booking_feature_unavailable(_booking: dict) -> str:
+    raise RuntimeError("The deployed database module is outdated. Redeploy the latest GitHub commit.")
+
+
+save_transport_booking = getattr(database, "save_transport_booking", _booking_feature_unavailable)
+transport_booking_rows = getattr(database, "transport_booking_rows", lambda: [])
 from modules.hotel_recommender import DESTINATION_COORDINATES, recommend_hotels
 from modules.nlp_processor import classify_intent, extract_entities
 from modules.rag_engine import format_context, load_documents, retrieve
