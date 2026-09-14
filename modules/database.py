@@ -26,6 +26,7 @@ def initialize_database() -> None:
         CREATE TABLE IF NOT EXISTS Activities (id INTEGER PRIMARY KEY, destination_id INTEGER, name TEXT, cost REAL, duration_hours REAL);
         CREATE TABLE IF NOT EXISTS Trips (id INTEGER PRIMARY KEY, user_id INTEGER, destination_id INTEGER, total_budget REAL, duration_days INTEGER, created_at TEXT, itinerary_markdown TEXT);
         CREATE TABLE IF NOT EXISTS Favorites (id INTEGER PRIMARY KEY, destination TEXT, total_budget REAL, duration_days INTEGER, itinerary_markdown TEXT, created_at TEXT);
+        CREATE TABLE IF NOT EXISTS TransportBookings (id INTEGER PRIMARY KEY, mode TEXT, origin TEXT, destination TEXT, trip_type TEXT, travelers INTEGER, estimated_cost REAL, pickup_location TEXT, travel_date TEXT, pickup_time TEXT, contact_name TEXT, contact_phone TEXT, status TEXT, created_at TEXT);
         """)
         count = connection.execute("SELECT COUNT(*) FROM Destinations").fetchone()[0]
         if count == 0 and DATA_PATH.exists():
@@ -65,3 +66,22 @@ def favorite_rows() -> list[dict]:
     initialize_database()
     with get_connection() as connection:
         return [dict(row) for row in connection.execute("SELECT * FROM Favorites ORDER BY created_at DESC")]
+
+
+def save_transport_booking(booking: dict) -> str:
+    """Save a local transport booking request and return its reference."""
+    initialize_database()
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """INSERT INTO TransportBookings
+            (mode, origin, destination, trip_type, travelers, estimated_cost, pickup_location, travel_date, pickup_time, contact_name, contact_phone, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (booking["mode"], booking["origin"], booking["destination"], booking["trip_type"], booking["travelers"], booking["estimated_cost"], booking["pickup_location"], booking["travel_date"], booking["pickup_time"], booking["contact_name"], booking["contact_phone"], "Pending confirmation", datetime.now(timezone.utc).isoformat()),
+        )
+        return f"TRP-{cursor.lastrowid:06d}"
+
+
+def transport_booking_rows() -> list[dict]:
+    initialize_database()
+    with get_connection() as connection:
+        return [dict(row) for row in connection.execute("SELECT * FROM TransportBookings ORDER BY created_at DESC")]

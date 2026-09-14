@@ -8,7 +8,7 @@ import requests
 import streamlit as st
 from pathlib import Path
 
-from modules.database import destination_rows, favorite_rows, initialize_database, log_trip, save_favorite
+from modules.database import destination_rows, favorite_rows, initialize_database, log_trip, save_favorite, save_transport_booking, transport_booking_rows
 from modules.hotel_recommender import DESTINATION_COORDINATES, recommend_hotels
 from modules.nlp_processor import classify_intent, extract_entities
 from modules.rag_engine import format_context, load_documents, retrieve
@@ -66,6 +66,11 @@ def budget_breakdown(budget: int, duration: int) -> dict[str, int]:
     return result
 
 
+def hotel_budget_per_night(budget: int, duration: int) -> int:
+    """Use the stay allocation when matching hotels to the total trip budget."""
+    return budget_breakdown(budget, duration)["Stay"] // max(duration, 1)
+
+
 def packing_list(entities: dict) -> list[str]:
     items = ["CNIC/passport, copies and emergency contacts", "Phone, charger and power bank", "Reusable water bottle", "Basic medicines and first-aid kit", "Comfortable walking shoes", "Weather-appropriate layers"]
     interests = set(entities.get("interests", []))
@@ -86,6 +91,95 @@ def food_recommendations(destination: str, interests: list[str]) -> list[str]:
         "Skardu": ["Balti cuisine", "Apricot soup", "Momos", "Local trout"],
     }
     return food_map.get(destination, [f"Try verified local specialties in {destination}", "Ask your hotel for hygienic family restaurants", "Keep one flexible meal for local discovery"])
+
+
+def daily_trip_schedule(entities: dict) -> str:
+    """Create a concrete daily schedule from the same local tools used in the planner."""
+    destination = entities["destination"]
+    duration = int(entities.get("duration") or 1)
+    budget = int(entities.get("budget") or 0)
+    hotels = recommend_hotels(destination, load_hotel_directory(), hotel_budget_per_night(budget, duration), 1)
+    hotel = hotels[0] if hotels else None
+    hotel_name = hotel["name"] if hotel else "Choose a verified hotel in the destination"
+    stay_summary = (
+        f"**Hotel:** {hotel_name}  \n"
+        f"**Rent:** PKR {float(hotel['price_per_night']):,.0f}/night · "
+        f"PKR {float(hotel['price_per_night']) * duration:,.0f} for {duration} nights  \n"
+        f"**Contact:** {hotel['contact_number']} · **Address:** {hotel['address']}"
+        if hotel else "**Hotel:** No matching local hotel found; confirm accommodation before booking."
+    )
+    places = nearby_place_details(destination)
+    foods = food_recommendations(destination, entities.get("interests", []))
+    daily_budget = budget // max(duration, 1)
+    lines = [f"## {duration}-Day {destination} Schedule", f"**Total trip budget:** PKR {budget:,}  \n{stay_summary}"]
+    for day in range(1, duration + 1):
+        primary = places[(day - 1) % len(places)] if places else {"name": destination, "description": f"Explore {destination}", "visit": "Day visit"}
+        secondary = places[day % len(places)] if len(places) > 1 else primary
+        food = foods[(day - 1) % len(foods)]
+        lines.append(
+            f"### Day {day}: {destination} · {primary['name']} area\n"
+            f"- **Stay:** {hotel_name}\n"
+            f"- **Morning:** Visit **{primary['name']}**. {primary['description']}\n"
+            f"- **Afternoon:** Explore **{secondary['name']}** and allow time for photos and local discovery.\n"
+            f"- **Food:** Try {food}.\n"
+            f"- **Evening:** Return to {hotel_name}, review the next day's route and keep an emergency buffer.\n"
+            f"- **Estimated daily spend:** PKR {daily_budget:,}"
+        )
+    return "\n\n".join(lines)
+
+
+def full_trip_plan(entities: dict, itinerary: str, weather: str) -> str:
+    """Combine the planner, Trip Tools, and Travel Hub outputs into one plan."""
+    destination = entities["destination"]
+    budget = int(entities.get("budget") or 0)
+    duration = int(entities.get("duration") or 1)
+    breakdown = budget_breakdown(budget, duration)
+    hotels = recommend_hotels(destination, load_hotel_directory(), hotel_budget_per_night(budget, duration), 3)
+    origin = entities.get("origin") or "Current location"
+    travelers = int(entities.get("travelers") or 1)
+    transport = transport_options(origin, destination, travelers, entities.get("trip_type") or "One-way", budget)
+    places = nearby_place_details(destination)[:4]
+    foods = food_recommendations(destination, entities.get("interests", []))
+    packing = packing_list(entities)
+    guide = travel_guide(destination, entities)
+    daily_schedule = daily_trip_schedule(entities)
+    alternatives = [item for item in recommend_destinations(entities, destinations, limit=4) if item["name"].casefold() != destination.casefold()][:3]
+    hotel_lines = "\n".join(
+        f"- **{hotel['name']}** | PKR {float(hotel['price_per_night']):,.0f}/night | "
+        f"PKR {float(hotel['price_per_night']) * duration:,.0f} for {duration} nights | "
+        f"{float(hotel['guest_rating']):.1f}/5 ({int(hotel['review_count'])} reviews)\n"
+        f"  Address: {hotel['address']} | Contact: {hotel['contact_number']}\n"
+        f"  Amenities: {hotel['amenities'].replace(' | ', ', ')}"
+        for hotel in hotels
+    ) or "- No local hotel directory result; confirm accommodation separately."
+    transport_lines = "\n".join(f"- {option['mode']}: PKR {option['cost']:,} estimated | {option['hours']:.1f} hours | {option['distance_km']:,} km" for option in transport)
+    place_lines = "\n".join(f"- **{place['name']}**: {place['description']} ({place['visit']})" for place in places)
+    alternative_lines = "\n".join(f"- {item['name']} | Fit {item['score']:.0%} | Estimated PKR {item['estimated_cost']:,}" for item in alternatives) or "- No alternative destination matches the current filters."
+    return f"""{daily_schedule}
+
+## Complete Trip Toolkit
+
+### Destination travel guide
+{guide}
+
+### Alternative destinations
+{alternative_lines}
+
+### Budget allocation
+""" + "\n".join(f"- {category}: PKR {amount:,}" for category, amount in breakdown.items()) + f"""
+
+### Transport plan
+**Route:** {origin} to {destination} · **Travellers:** {travelers} · **Trip type:** {entities.get('trip_type') or 'One-way'}
+{transport_lines}
+
+### Recommended stay
+{hotel_lines}
+
+### Nearby places to explore
+{place_lines}
+
+### Food plan
+""" + "\n".join(f"- {food}" for food in foods) + "\n\n### Packing checklist\n" + "\n".join(f"- {item}" for item in packing) + f"\n\n**Weather:** {weather}\n\n*Confirm live prices, hotel availability, transport schedules and attraction timings before booking.*"
 
 
 def compare_destinations(names: list[str], budget: int, duration: int) -> list[dict]:
@@ -109,9 +203,10 @@ def transport_options(origin: str, destination: str, travelers: int, trip_type: 
     same_city = origin == destination
     options = []
     if same_city:
-        options.append({"mode": "Ride-hailing", "best_for": "Short city travel", "cost": 900 * multiplier, "hours": 0.5, "note": "Book after checking the live in-app fare."})
+        options.append({"mode": "Cab / Taxi", "best_for": "Short city travel", "cost": 900 * multiplier, "hours": 0.5, "note": "Driver and fare are confirmed after the booking request."})
     else:
         options.extend([
+            {"mode": "Cab / Taxi", "best_for": "Private door-to-door travel", "cost": max(3500, round(distance * 75 + 1500)) * multiplier, "hours": max(1.0, distance / 50), "note": "Driver, vehicle and final fare require provider confirmation."},
             {"mode": "Private car", "best_for": "Families and flexible stops", "cost": max(4500, round(distance * 65 + 2500)) * multiplier, "hours": max(1.0, distance / 55), "note": "Fuel, tolls and driver terms can change the quote."},
             {"mode": "Bus or coach", "best_for": "Lowest intercity cost", "cost": max(800, round(distance * 5.5)) * travelers * multiplier, "hours": max(2.0, distance / 45), "note": "Confirm operator schedule and seat availability."},
             {"mode": "Domestic flight", "best_for": "Long-distance routes", "cost": max(8000, round(distance * 12)) * travelers * multiplier, "hours": max(1.0, distance / 600 + 2), "note": "Fare excludes airport transfers and baggage changes."},
@@ -141,6 +236,12 @@ def nearby_place_details(destination: str) -> list[dict[str, str]]:
             "Daman-e-Koh": ("https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=900&q=80", "A hilltop viewpoint overlooking Islamabad.", "Margalla Hills · 2-3 hours · Clear weather", "Roads can be busy on weekends; carry water."),
             "Pakistan Monument": ("https://images.unsplash.com/photo-1539650116574-75c0c6d73f6e?auto=format&fit=crop&w=900&q=80", "A national monument and museum on Shakarparian Hills.", "Shakarparian · 1-2 hours · Afternoon", "Verify museum hours before visiting."),
             "Saidpur Village": ("https://images.unsplash.com/photo-1516026672322-bc52d61a55d5?auto=format&fit=crop&w=900&q=80", "A restored heritage village with cafés and hill views.", "Margalla foothills · 1-2 hours · Evening", "Expect crowded parking at peak times."),
+        },
+        "Skardu": {
+            "Shangrila Resort": ("https://images.unsplash.com/photo-1464278533981-50106e6176b1?auto=format&fit=crop&w=900&q=80", "A lakeside resort near Lower Kachura Lake with mountain scenery and peaceful viewpoints.", "Lower Kachura · Half day · Daylight", "Confirm boating and resort access before travelling."),
+            "Upper Kachura Lake": ("https://images.unsplash.com/photo-1500534623283-312aade485b7?auto=format&fit=crop&w=900&q=80", "A clear alpine lake surrounded by rugged peaks and pine-covered slopes.", "Kachura valley · 2-4 hours · Morning", "Carry water, warm layers and cash for local transport."),
+            "Deosai Plains": ("https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=900&q=80", "A high-altitude plateau known for wide landscapes, wildlife and dramatic mountain horizons.", "Day trip · Full day · Summer season", "Check road and weather conditions because access is seasonal."),
+            "Mansehra viewpoints": ("https://images.unsplash.com/photo-1516026672322-bc52d61a55d5?auto=format&fit=crop&w=900&q=80", "Scenic roadside viewpoints for a relaxed stop while travelling through the mountain route.", "Roadside stop · 1-2 hours · Clear weather", "Use marked viewpoints and avoid stopping on unsafe road edges."),
         },
         "Hunza": {
             "Attabad Lake": ("https://images.unsplash.com/photo-1464278533981-50106e6176b1?auto=format&fit=crop&w=900&q=80", "Turquoise alpine lake known for boating and dramatic views.", "Gojal · Half day · Daylight", "Wear layers and check road conditions."),
@@ -245,16 +346,19 @@ def inject_theme() -> None:
     """, unsafe_allow_html=True)
 
 
-def sidebar_controls() -> tuple[str, int, int, str, list[str]]:
+def sidebar_controls() -> tuple[str, int, int, str, list[str], str, int, str]:
     st.sidebar.markdown("<div class='brand'><span class='brand-mark'>⚙️</span><span class='brand-title' style='font-size:1.1rem'>Trip Preferences</span></div>", unsafe_allow_html=True)
     language = st.sidebar.selectbox("Select Language / زبان منتخب کریں", ["English", "Roman Urdu", "Urdu"])
     st.sidebar.markdown("<div class='rule'></div>", unsafe_allow_html=True)
     budget = st.sidebar.slider("Budget (PKR)", min_value=10000, max_value=500000, value=100000, step=5000)
     duration = st.sidebar.number_input("Duration (Days)", min_value=1, max_value=30, value=5)
+    origin = st.sidebar.selectbox("Starting point", ["Current location"] + list(DESTINATION_COORDINATES), key="sidebar_origin")
+    travelers = st.sidebar.number_input("Travellers", min_value=1, max_value=20, value=1, step=1, key="sidebar_travelers")
+    trip_type = st.sidebar.selectbox("Trip type", ["One-way", "Return trip"], key="sidebar_trip_type")
     style = st.sidebar.selectbox("Travel Style", ["Auto", "Budget Friendly", "Comfort", "Luxury", "Family Friendly", "Adventure"])
     interests = st.sidebar.multiselect("Interests & Activities", ["Adventure", "Mountains", "Nature", "Family", "Food", "Culture", "History", "Photography", "Lakes"], default=[])
     st.sidebar.markdown("<div class='rule'></div><div class='card'><b>💡 Plan with confidence</b><br><span style='color:#aab5c7'>Select your preferences, then ask the AI Travel Assistant for recommendations.</span></div>", unsafe_allow_html=True)
-    return language, budget, duration, style, [item.lower() for item in interests]
+    return language, budget, duration, style, [item.lower() for item in interests], origin, int(travelers), trip_type
 
 
 inject_theme()
@@ -264,13 +368,14 @@ train_lightweight_ranker(destinations)
 for key, default in {"chat_history": [], "extracted_entities": {}, "recommendations": [], "current_itinerary": "", "uploaded_image_hash": None, "landmark_result": None, "weather_result": ""}.items():
     st.session_state.setdefault(key, default)
 
-language, budget_filter, duration_filter, style_filter, interests_filter = sidebar_controls()
+language, budget_filter, duration_filter, style_filter, interests_filter, origin_filter, travelers_filter, trip_type_filter = sidebar_controls()
 st.markdown("<div class='brand'><span class='brand-mark'>✈️</span><span class='brand-title'>AI Travel Agent</span></div><div class='subtitle'>Your intelligent multilingual travel planning assistant</div>", unsafe_allow_html=True)
 
-tab_assistant, tab_tools, tab_hub, tab_weather, tab_landmark, tab_status = st.tabs(["🗺️ AI Trip Planner", "🧰 Trip Tools", "🧭 Travel Hub", "🌤️ Live Weather", "📷 Landmark Recognition", "💻 System Status"])
+tab_assistant, tab_weather, tab_landmark, tab_status = st.tabs(["🗺️ AI Trip Planner", "🌤️ Live Weather", "📷 Landmark Recognition", "💻 System Status"])
 
 with tab_assistant:
     st.subheader("Plan your next journey")
+    st.caption("Generate one complete plan with travel guide, budget, transport, hotels, nearby places, food, packing and daily activities.")
     left, right = st.columns([1.25, .9])
     with left:
         for message in st.session_state.chat_history:
@@ -284,6 +389,9 @@ with tab_assistant:
             entities["duration"] = entities["duration"] or duration_filter
             entities["travel_style"] = entities["travel_style"] or style_filter.lower()
             entities["interests"] = sorted(set(entities["interests"] + interests_filter))
+            entities["origin"] = entities.get("origin") or origin_filter
+            entities["travelers"] = entities.get("travelers") or travelers_filter
+            entities["trip_type"] = trip_type_filter
             st.session_state.extracted_entities = entities
             intent = classify_intent(prompt)
             missing = entities["missing"]
@@ -303,11 +411,14 @@ with tab_assistant:
             selected_destination = destination_query.strip() if selected == "Use typed destination" else selected
             confirmed_budget = st.number_input("Total budget (PKR)", min_value=0, value=int(entities.get("budget") or budget_filter), step=5000, key="confirmed_budget")
             confirmed_duration = st.number_input("Days", min_value=1, max_value=30, value=int(entities.get("duration") or duration_filter), key="confirmed_duration")
+            confirmed_travelers = st.number_input("Travellers", min_value=1, max_value=20, value=int(entities.get("travelers") or travelers_filter), key="confirmed_travelers")
+            confirmed_origin = st.selectbox("Starting point", ["Current location"] + list(DESTINATION_COORDINATES), index=(["Current location"] + list(DESTINATION_COORDINATES)).index(entities.get("origin")) if entities.get("origin") in (["Current location"] + list(DESTINATION_COORDINATES)) else 0, key="confirmed_origin")
+            confirmed_trip_type = st.selectbox("Trip type", ["One-way", "Return trip"], index=1 if entities.get("trip_type") == "Return trip" else 0, key="confirmed_trip_type")
             if st.button("🔎 Get Recommendations", type="primary", use_container_width=True):
                 if not selected_destination:
                     st.error("Please type a destination first.")
                 else:
-                    entities.update({"destination": selected_destination, "budget": confirmed_budget, "duration": confirmed_duration})
+                    entities.update({"destination": selected_destination, "budget": confirmed_budget, "duration": confirmed_duration, "travelers": confirmed_travelers, "origin": confirmed_origin, "trip_type": confirmed_trip_type})
                     st.session_state.extracted_entities = entities
                     recommendation_data = destinations
                     if selected_destination.lower() not in {row["name"].lower() for row in destinations}:
@@ -320,18 +431,87 @@ with tab_assistant:
         for card, item in zip(cards, st.session_state.recommendations):
             with card:
                 st.markdown(f"<div class='card'><h3>{item['name']}</h3><p style='color:#aab5c7'>{item['description']}</p><b>Fit: {item['score']:.0%}</b><br><span style='color:#aab5c7'>Estimate: PKR {item['estimated_cost']:,}</span></div>", unsafe_allow_html=True)
-        if st.button("🗺️ Generate grounded itinerary", type="primary"):
+        if st.button("🗺️ Generate complete trip plan", type="primary"):
             entities = st.session_state.extracted_entities
             context = format_context(retrieve(f"{entities['destination']} {' '.join(entities.get('interests', []))}"))
-            itinerary = generate_itinerary(entities, context, get_weather(entities["destination"]))
+            weather = get_weather(entities["destination"])
+            itinerary = full_trip_plan(entities, generate_itinerary(entities, context, weather), weather)
             st.session_state.current_itinerary = itinerary
             log_trip(entities["destination"], entities["budget"], entities["duration"], itinerary)
             st.rerun()
     if st.session_state.current_itinerary:
         st.markdown(st.session_state.current_itinerary)
 
+    st.markdown("---")
+    st.subheader("🧰 Planner Tools")
+    planner_tool_tabs = st.tabs(["💰 Budget, Food & Packing", "🧭 Hotels, Transport & Places"])
+    planner_entities = st.session_state.extracted_entities
+    if not planner_entities.get("destination"):
+        st.info("Enter a destination above and generate recommendations to unlock all planner tools.")
+    else:
+        with planner_tool_tabs[0]:
+            planner_left, planner_right = st.columns(2)
+            with planner_left:
+                st.markdown("#### 💰 Budget Breakdown")
+                planner_breakdown = budget_breakdown(int(planner_entities.get("budget", budget_filter)), int(planner_entities.get("duration", duration_filter)))
+                for category, amount in planner_breakdown.items():
+                    st.markdown(f"<div class='metric'><span>{category}</span><span style='float:right;font-weight:700'>PKR {amount:,}</span></div>", unsafe_allow_html=True)
+            with planner_right:
+                st.markdown("#### 🧳 Packing Checklist")
+                for item in packing_list(planner_entities):
+                    st.checkbox(item, value=False, key=f"planner_pack_{item}")
+            st.markdown("#### 🍽️ Food Recommendations")
+            food_columns = st.columns(2)
+            for index, food in enumerate(food_recommendations(planner_entities["destination"], planner_entities.get("interests", []))):
+                food_columns[index % 2].markdown(f"- {food}")
+
+        with planner_tool_tabs[1]:
+            planner_hub_tool = st.radio("Choose planner tool", ["🏨 Hotels", "🚗 Transport", "📍 Nearby Places", "📄 Travel Guide", "📊 Trip Dashboard"], horizontal=True, key="planner_hub_tool")
+            if planner_hub_tool == "🏨 Hotels":
+                planner_budget = int(planner_entities.get("budget", 0))
+                planner_duration = int(planner_entities.get("duration", 1))
+                hotel_results = recommend_hotels(planner_entities["destination"], load_hotel_directory(), hotel_budget_per_night(planner_budget, planner_duration) or None, 3)
+                hotel_columns = st.columns(min(3, len(hotel_results))) if hotel_results else []
+                for index, hotel in enumerate(hotel_results):
+                    with hotel_columns[index % len(hotel_columns)]:
+                        st.markdown(f"<div class='card'><h3>{hotel['name']}</h3><b>PKR {float(hotel['price_per_night']):,.0f}/night</b><br>⭐ {float(hotel['guest_rating']):.1f}/5 · 📞 {hotel['contact_number']}<br>📍 {hotel['address']}</div>", unsafe_allow_html=True)
+            elif planner_hub_tool == "🚗 Transport":
+                for option in transport_options("Current location", planner_entities["destination"], 1, "One-way", int(planner_entities.get("budget", 0))):
+                    st.markdown(f"<div class='metric'><b>{option['mode']}</b><br>PKR {option['cost']:,} · {option['distance_km']} km · {option['hours']:.1f} hours</div>", unsafe_allow_html=True)
+            elif planner_hub_tool == "📍 Nearby Places":
+                place_details = nearby_place_details(planner_entities["destination"])
+                place_names = [place["name"] for place in place_details]
+                selected_name = st.session_state.get("planner_selected_place", place_names[0])
+                if selected_name not in place_names:
+                    selected_name = place_names[0]
+                place_columns = st.columns(min(2, len(place_details)))
+                for index, place in enumerate(place_details):
+                    with place_columns[index % len(place_columns)]:
+                        if st.button(f"📍 {place['name']}", key=f"planner_nearby_{planner_entities['destination']}_{index}", use_container_width=True):
+                            st.session_state.planner_selected_place = place["name"]
+                            st.rerun()
+                        st.caption(place["visit"])
+                selected_place = next(place for place in place_details if place["name"] == selected_name)
+                st.markdown(f"### 📷 {selected_place['name']}")
+                detail_left, detail_right = st.columns([1.2, 1])
+                with detail_left:
+                    st.image(selected_place["image"], use_container_width=True)
+                with detail_right:
+                    st.markdown(f"**{selected_place['description']}**")
+                    st.markdown(f"📌 **Visit plan:** {selected_place['visit']}")
+                    st.markdown(f"💡 **Travel tip:** {selected_place['tip']}")
+                    st.caption("Confirm current access, timings, weather and local conditions before visiting.")
+            elif planner_hub_tool == "📄 Travel Guide":
+                st.markdown(travel_guide(planner_entities["destination"], planner_entities))
+            elif planner_hub_tool == "📊 Trip Dashboard":
+                planner_trips = favorite_rows()
+                st.metric("Saved trips", len(planner_trips))
+                st.metric("Planned budget", f"PKR {sum(float(trip['total_budget']) for trip in planner_trips):,.0f}")
+
+_REMOVED_LEGACY_TABS = """Legacy top-level Budget/Food/Packing and Hotels/Transport/Places tabs removed.
+Their functionality is available inside AI Trip Planner > Planner Tools.
 with tab_tools:
-    st.subheader("🧰 Smart Trip Tools")
+    st.subheader("💰 Budget, Food & Packing")
     entities = st.session_state.extracted_entities
     if not entities.get("destination"):
         st.info("First create a trip in AI Travel Assistant, then use these tools for its budget, packing and food plan.")
@@ -374,7 +554,8 @@ with tab_tools:
             st.info("Generate an itinerary first to enable PDF download and favorites.")
             if st.button("🗺️ Generate itinerary now", type="primary", key="tools_generate_itinerary"):
                 context = format_context(retrieve(f"{entities['destination']} {' '.join(entities.get('interests', []))}"))
-                itinerary = generate_itinerary(entities, context, get_weather(entities["destination"]))
+                weather = get_weather(entities["destination"])
+                itinerary = full_trip_plan(entities, generate_itinerary(entities, context, weather), weather)
                 st.session_state.current_itinerary = itinerary
                 log_trip(entities["destination"], int(entities["budget"]), int(entities["duration"]), itinerary)
                 st.rerun()
@@ -385,7 +566,7 @@ with tab_tools:
                 st.markdown(f"<div class='metric'><b>{favorite['destination']}</b><br><span style='color:#aab5c7'>{favorite['duration_days']} days · PKR {favorite['total_budget']:,}</span></div>", unsafe_allow_html=True)
 
     with tab_hub:
-        st.subheader("🧭 Travel Hub")
+        st.subheader("🧭 Hotels, Transport & Places")
         hub_entities = st.session_state.extracted_entities
         hub_destination = hub_entities.get("destination") or st.text_input("Choose a destination for travel tools", value="Lahore", key="hub_destination")
         hub_view = st.radio("Open tool", ["⚖️ Compare Destinations", "🏨 Hotel Finder", "🚗 Transport Planner", "📍 Explore Nearby", "📄 Travel Guide", "❤️ My Trips", "📊 Trip Dashboard"], horizontal=True, label_visibility="collapsed", key="hub_view")
@@ -452,6 +633,48 @@ with tab_tools:
                             f"PKR {option['per_person']:,} per person{budget_line}<br>"
                             f"📍 {option['distance_km']:,} km · ⏱️ {duration}<br>"
                             f"<span>Best for: {option['best_for']}<br>{option['note']}</span></div>", unsafe_allow_html=True)
+                        if st.button(f"📅 Book {option['mode']} now", key=f"book_transport_{index}_{route_destination}", type="primary", use_container_width=True):
+                            st.session_state.selected_transport_booking = index
+                            st.rerun()
+                selected_booking_index = st.session_state.get("selected_transport_booking")
+                if selected_booking_index is not None and selected_booking_index < len(options):
+                    selected_option = options[selected_booking_index]
+                    st.markdown(f"### 📅 Book {selected_option['mode']}")
+                    st.info(f"Route: {origin} → {route_destination} · Estimated fare: PKR {selected_option['cost']:,} · {trip_type}")
+                    with st.form("transport_booking_form"):
+                        booking_name = st.text_input("Contact name")
+                        booking_phone = st.text_input("Phone number", placeholder="+92 300 1234567")
+                        pickup_location = st.text_input("Pickup location", value=origin)
+                        travel_date = st.date_input("Travel date")
+                        pickup_time = st.time_input("Pickup time")
+                        booking_columns = st.columns(2)
+                        submit_booking = booking_columns[0].form_submit_button("✅ Confirm booking request", use_container_width=True)
+                        cancel_booking = booking_columns[1].form_submit_button("Cancel", use_container_width=True)
+                        if cancel_booking:
+                            st.session_state.pop("selected_transport_booking", None)
+                            st.rerun()
+                        if submit_booking:
+                            if not booking_name.strip() or not booking_phone.strip() or not pickup_location.strip():
+                                st.error("Name, phone number and pickup location are required.")
+                            else:
+                                reference = save_transport_booking({
+                                    "mode": selected_option["mode"], "origin": origin, "destination": route_destination,
+                                    "trip_type": trip_type, "travelers": int(travelers), "estimated_cost": selected_option["cost"],
+                                    "pickup_location": pickup_location.strip(), "travel_date": travel_date.isoformat(),
+                                    "pickup_time": pickup_time.strftime("%H:%M"), "contact_name": booking_name.strip(),
+                                    "contact_phone": booking_phone.strip(),
+                                })
+                                st.session_state.pop("selected_transport_booking", None)
+                                st.success(f"Booking request {reference} saved. Status: Pending confirmation.")
+                                st.caption("A transport provider must confirm the fare, vehicle and availability before travel.")
+            booking_rows = transport_booking_rows()
+            if booking_rows:
+                st.markdown("#### 📋 My transport booking requests")
+                st.dataframe(
+                    [{"Reference": f"TRP-{row['id']:06d}", "Vehicle": row["mode"], "Route": f"{row['origin']} → {row['destination']}", "Date": row["travel_date"], "Status": row["status"]} for row in booking_rows[:10]],
+                    use_container_width=True,
+                    hide_index=True,
+                )
             st.caption("Planning estimates only. Confirm live fares, schedules, road conditions and availability before booking.")
 
         elif hub_view == "📍 Explore Nearby":
@@ -528,6 +751,8 @@ with tab_tools:
                 writer.writeheader()
                 writer.writerows(table_rows)
                 st.download_button("📥 Export dashboard CSV", data=export_data.getvalue(), file_name="trip_dashboard.csv", mime="text/csv", use_container_width=True)
+
+"""
 
 with tab_weather:
     st.subheader("🌤️ Live Weather")

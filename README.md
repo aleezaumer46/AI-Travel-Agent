@@ -12,13 +12,16 @@ The project is designed as a Final Year Project (FYP) and keeps its core logic i
 - Local SQLite persistence for trips and favorite itineraries
 - Local TF-IDF retrieval over the bundled travel knowledge base
 - Grounded day-by-day itinerary generation with optional OpenAI integration
+- One-click complete trip plans combining itinerary, budget, transport, hotels, nearby places, food, and packing
 - Live weather lookup with graceful failure handling
 - General image and landmark recognition using OpenAI Vision or a local CLIP fallback
 - Smart budget breakdown and trip optimization
 - Smart packing assistant and destination food guide
 - Destination comparison, transport planner, nearby places, and downloadable travel guide
 - Advanced transport planner with route distance, travellers, one-way/return fares, travel time, budget fit, and sorting
+- Transport booking requests for car, bus, and flight options with pickup details, date/time, contact validation, reference number, and pending-confirmation status
 - Nearest and best hotel finder with rent, contact number, ratings, reviews, distance, and amenities
+- Complete plan output now includes starting point, traveller count, one-way/return transport, hotel address, phone, amenities, rating, nightly rent, and total stay estimate
 - PDF itinerary export and saved favorite trips
 - Dark, tabbed Streamlit interface with system readiness status
 
@@ -115,12 +118,13 @@ Never commit `.streamlit/secrets.toml`. It is excluded by `.gitignore`. If a key
 ## Typical Workflow
 
 1. Select language, budget, duration, style, and interests in the sidebar.
-2. Describe the trip in the AI Trip Planner.
-3. Confirm or type any destination.
-4. Review Smart Recommendations.
-5. Generate the grounded itinerary.
-6. Open Trip Tools for budget, packing, food, PDF, and favorites.
-7. Use Travel Hub for comparisons, transport, nearby exploration, guides, and dashboard insights.
+2. Set starting point, traveller count, trip type, budget, duration, and interests in the sidebar.
+3. Describe the trip in the AI Trip Planner. Roman Urdu requests such as `Lahore ka 5 din ka trip 100k budget mein 4 logon ke liye` are supported.
+4. Confirm or type any destination.
+5. Review Smart Recommendations.
+6. Generate the grounded itinerary.
+7. Open Trip Tools for budget, packing, food, PDF, and favorites.
+8. Use Travel Hub for comparisons, transport, nearby exploration, guides, and dashboard insights.
 
 ## Data and Privacy
 

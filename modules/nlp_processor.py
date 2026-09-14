@@ -5,7 +5,7 @@ from typing import Any
 DESTINATIONS = ["Hunza", "Skardu", "Swat", "Lahore", "Islamabad", "Naran Kaghan", "Chitral"]
 INTERESTS = ["mountains", "nature", "photography", "adventure", "lakes", "family", "history", "food", "culture", "city", "waterfalls"]
 STYLE_WORDS = {"budget": "budget", "luxury": "luxury", "comfortable": "comfort", "comfort": "comfort", "adventure": "adventure", "family": "family"}
-ROMAN_MAP = {"pahaar": "mountains", "jheel": "lakes", "fitrat": "nature", "khaana": "food", "khana": "food", "tareekh": "history", "khandan": "family", "safar": "travel", "din": "days", "rupay": "PKR"}
+ROMAN_MAP = {"pahaar": "mountains", "pahad": "mountains", "jheel": "lakes", "fitrat": "nature", "khaana": "food", "khana": "food", "tareekh": "history", "khandan": "family", "safar": "travel", "din": "days", "rupay": "PKR", "logon": "travellers", "log": "travellers", "musafir": "travellers"}
 
 
 def standardize_text(text: str) -> str:
@@ -30,6 +30,7 @@ def extract_entities(text: str, language: str = "English") -> dict[str, Any]:
     destination = next((item for item in DESTINATIONS if item.lower() in normalized), None)
     budget = _number_after([r"(?:budget|under|around|with)\s*(?:of\s*)?(?:pkr\s*)?([\d,]+)", r"(?:pkr|rs)\s*([\d,]+)", r"([\d,]+)\s*(?:budget|pkr|rs)"], normalized)
     duration = _number_after([r"(\d+)\s*(?:days?|din)", r"for\s*(\d+)"], normalized)
+    travelers = _number_after([r"(\d+)\s*(?:travellers?|travelers?|persons?|people|travellers|musafir)\b"], normalized)
     interests = [item for item in INTERESTS if re.search(rf"\b{re.escape(item)}\b", normalized)]
     style = next((value for key, value in STYLE_WORDS.items() if re.search(rf"\b{key}\b", normalized)), None)
     missing = []
@@ -39,7 +40,7 @@ def extract_entities(text: str, language: str = "English") -> dict[str, Any]:
         missing.append("duration")
     if not budget:
         missing.append("budget")
-    return {"destination": destination, "budget": budget, "duration": duration, "interests": interests, "travel_style": style, "language": language, "missing": missing, "normalized_text": normalized}
+    return {"destination": destination, "budget": budget, "duration": duration, "travelers": travelers or 1, "interests": interests, "travel_style": style, "language": language, "missing": missing, "normalized_text": normalized}
 
 
 def classify_intent(text: str) -> str:
