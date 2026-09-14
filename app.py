@@ -311,13 +311,15 @@ def inject_theme() -> None:
     st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
-    :root { --navy:#0d172b; --panel:#17243a; --panel2:#1e2d45; --line:#2c3a50; --text:#f5f7fb; --muted:#aab5c7; --blue:#078fd0; --blue2:#19a9e8; --green:#39c985; }
+    :root { --navy:#f4f3ef; --panel:#f7f6f3; --panel2:#edf1ee; --line:#dfe5e0; --text:#1f2323; --muted:#5f6968; --blue:#a7c2b8; --blue2:#a7c2b8; --green:#39c985; }
     .stApp { background:var(--navy); color:var(--text); }
     html, body, [class*="css"] { font-family:'DM Sans', sans-serif; }
     [data-testid="stHeader"] { background:transparent; }
-    [data-testid="stSidebar"] { background:#17243a; border-right:1px solid var(--line); }
+    [data-testid="stSidebar"] { background:#f9f9f7; border-right:1px solid var(--line); }
     [data-testid="stSidebar"] > div:first-child { padding:1.2rem 1.35rem; }
     [data-testid="stSidebarCollapseButton"] button, [data-testid="stSidebarCollapseButton"] button svg { color:#19a9e8 !important; fill:#19a9e8 !important; stroke:#19a9e8 !important; opacity:1 !important; }
+    div[data-testid="stSidebar"] .card { background:#e7ece9 !important; border:1px solid rgba(31,35,35,0.08) !important; }
+    div[data-testid="stSidebar"] .card b, div[data-testid="stSidebar"] .card span { color:#1f2323 !important; }
     [data-testid="stSidebarCollapseButton"] button:hover, [data-testid="stSidebarCollapseButton"] button:hover svg { color:#f5f7fb !important; fill:#f5f7fb !important; stroke:#f5f7fb !important; }
     h1,h2,h3,h4,p,label,span { color:var(--text); }
     h1 { font-size:2.35rem !important; letter-spacing:-.04em; }
@@ -354,6 +356,29 @@ def inject_theme() -> None:
     [data-testid="stDownloadButton"] button { color:#f5f7fb !important; -webkit-text-fill-color:#f5f7fb !important; background:#078fd0 !important; border-color:#078fd0 !important; }
     [data-testid="stChatMessage"] { background:var(--panel); border:1px solid var(--line); }
     .stAlert { background:var(--panel2); border-color:#40516b; }
+    .stButton > button[type="submit"], button[kind="primary"] { background:#d8ebdf !important; border:1px solid rgba(31,35,35,0.08) !important; color:#171b1d !important; }
+    .stButton > button[type="submit"]:hover, button[kind="primary"]:hover { background:#cfe4d7 !important; }
+    .stButton > button[type="submit"] span, button[kind="primary"] span { color:#171b1d !important; }
+    .assistant-hero { margin: 0 0 1.5rem; }
+    .assistant-hero h1 { font-size: clamp(2.3rem, 4vw, 4rem) !important; letter-spacing:-0.06em; margin: 0 0 1.5rem; font-weight: 700; color: #171b1d !important; }
+    .assistant-hero h1, h3, .stMarkdown h3, [data-testid="stMarkdownContainer"] h3 { color: #171b1d !important; }
+    .stMarkdown h3 { color: #171b1d !important; }
+    .card { background: rgba(209, 220, 214, 0.7) !important; border: 1px solid rgba(31,35,35,0.08) !important; }
+    .card h3, .card p, .card b, .card span { color: #171b1d !important; }
+    div[data-testid="stFormSubmitButton"] button {
+        background: rgba(27, 33, 32, 0.18) !important; border: none !important; border-radius: 50% !important; color: #1d2424 !important; min-width: 3.25rem !important; width: 3.25rem !important; height: 3.25rem !important; padding: 0 !important; font-size: 1.7rem !important; line-height: 1 !important; display:flex; align-items:center; justify-content:center; box-shadow:none !important; }
+    div[data-testid="stFormSubmitButton"] button:hover { background: rgba(27, 33, 32, 0.24) !important; }
+    div[data-testid="stFormSubmitButton"] button span { color: #1d2424 !important; }
+    div[data-testid="stForm"] > div {
+        display:flex; align-items:center; gap:0.8rem; background:#dce7e3; border-radius: 22px; padding: 0.45rem 0.55rem 0.45rem 1rem; border: 1px solid rgba(42,58,52,0.08); box-shadow: 0 2px 0 rgba(17,24,39,0.02); }
+    div[data-testid="stForm"] input {
+        background: transparent !important; border: none !important; box-shadow: none !important; color: #000000 !important; -webkit-text-fill-color: #000000 !important; font-size: 1.1rem !important; padding: 0.75rem 0.5rem 0.75rem 0 !important; height: 3.2rem !important; }
+    div[data-testid="stForm"] input::placeholder { color: #000000 !important; opacity: 1 !important; -webkit-text-fill-color: #000000 !important; }
+    div[data-testid="stForm"] div[role="textbox"] { color: #000000 !important; }
+    div[data-testid="stForm"] input, div[data-testid="stForm"] input:focus, div[data-testid="stForm"] input:active { color: #000000 !important; -webkit-text-fill-color: #000000 !important; }
+    [data-testid="stTextInput"] input, [data-testid="stTextInput"] textarea { color: #000000 !important; -webkit-text-fill-color: #000000 !important; }
+    [data-testid="stTextInput"] input::placeholder, [data-testid="stTextInput"] textarea::placeholder { color: #000000 !important; opacity: 1 !important; -webkit-text-fill-color: #000000 !important; }
+    @media (max-width: 768px) { div[data-testid="stForm"] > div { padding-left: 0.75rem; } }
     </style>
     """, unsafe_allow_html=True)
 
@@ -386,17 +411,28 @@ st.markdown("<div class='brand'><span class='brand-mark'>✈️</span><span clas
 tab_assistant, tab_weather, tab_landmark, tab_status = st.tabs(["🗺️ AI Trip Planner", "🌤️ Live Weather", "📷 Landmark Recognition", "💻 System Status"])
 
 with tab_assistant:
-    st.subheader("Plan your next journey")
-    st.caption("Generate one complete plan with travel guide, budget, transport, hotels, nearby places, food, packing and daily activities.")
+    st.markdown("<div class='assistant-hero'><h1>Tell Ayla what you have in mind</h1></div>", unsafe_allow_html=True)
     left, right = st.columns([1.25, .9])
     with left:
         for message in st.session_state.chat_history:
             with st.chat_message(message["role"]):
                 st.markdown(message["content"])
-        prompt = st.chat_input("e.g. Mujhe Lahore ka 5 din ka trip 100k budget mein chahiye")
-        if prompt:
-            st.session_state.chat_history.append({"role": "user", "content": prompt})
-            entities = extract_entities(prompt, language)
+
+        with st.form(key="assistant_prompt_form", clear_on_submit=True):
+            prompt_col, submit_col = st.columns([12, 1.3])
+            with prompt_col:
+                prompt = st.text_input(
+                    "Trip idea",
+                    key="assistant_prompt_input",
+                    label_visibility="collapsed",
+                    placeholder="e.g. 4 din Hunza trip, 100k budget, photography ar nature",
+                )
+            with submit_col:
+                submitted = st.form_submit_button("↑", help="Send prompt", use_container_width=True)
+
+        if submitted and prompt.strip():
+            st.session_state.chat_history.append({"role": "user", "content": prompt.strip()})
+            entities = extract_entities(prompt.strip(), language)
             entities["budget"] = entities["budget"] or budget_filter
             entities["duration"] = entities["duration"] or duration_filter
             entities["travel_style"] = entities["travel_style"] or style_filter.lower()
@@ -405,7 +441,7 @@ with tab_assistant:
             entities["travelers"] = entities.get("travelers") or travelers_filter
             entities["trip_type"] = trip_type_filter
             st.session_state.extracted_entities = entities
-            intent = classify_intent(prompt)
+            intent = classify_intent(prompt.strip())
             missing = entities["missing"]
             answer = f"I understood this as **{intent.replace('_', ' ')}**. Please confirm: {', '.join(missing)}." if missing else "I extracted your trip details. Confirm them on the right to get recommendations."
             st.session_state.chat_history.append({"role": "assistant", "content": answer})
