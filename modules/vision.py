@@ -6,6 +6,7 @@ import re
 from functools import lru_cache
 from typing import Any
 import requests
+from PIL import ExifTags
 
 LANDMARK_HINTS = {"hunza": "Hunza", "skardu": "Skardu", "lahore": "Lahore", "islamabad": "Islamabad"}
 LOCAL_CANDIDATES = [
@@ -14,7 +15,9 @@ LOCAL_CANDIDATES = [
     "Jama Masjid Delhi India", "Humayun's Tomb Delhi India",
     "Hunza Valley Pakistan", "Attabad Lake Pakistan",
     "Baltit Fort Pakistan", "Skardu Pakistan", "Deosai National Park Pakistan", "Malam Jabba Swat Pakistan",
-    "Naran Kaghan Pakistan", "Chitral Pakistan", "a natural mountain landscape", "a city street", "a mosque or religious building",
+    "Naran Kaghan Pakistan", "Chitral Pakistan", "Kashmir Pakistan", "Swat Valley Pakistan", "a natural mountain landscape",
+    "a turquoise alpine lake", "a green valley with a river", "a high altitude desert landscape", "a forest waterfall",
+    "a city street", "a mosque or religious building",
     "a historic building", "a modern building", "food or a restaurant dish", "a person or group of people",
     "an animal", "a vehicle", "an indoor room", "a beach or coastline", "an unknown place",
     "Machu Picchu Peru", "Eiffel Tower Paris France", "Taj Mahal Agra India", "Statue of Liberty New York",
@@ -29,7 +32,39 @@ LANDMARK_DESCRIPTIONS = {
     "Badshahi Mosque Lahore": "Badshahi Mosque Lahore, a huge red sandstone mosque with three white domes and tall minarets",
     "Faisal Mosque Islamabad": "Faisal Mosque Islamabad, a large white tent-shaped modern mosque surrounded by hills",
     "Minar-e-Pakistan Lahore": "Minar-e-Pakistan, a tall white concrete tower with a flared flower-like base",
+    "Hunza Valley Pakistan": "Hunza Valley in northern Pakistan, with sharp rocky peaks, terraced green slopes, dry mountain valleys, and clear alpine light",
+    "Attabad Lake Pakistan": "Attabad Lake in Hunza, a bright turquoise mountain lake surrounded by steep bare rock peaks",
+    "Skardu Pakistan": "Skardu in Gilgit-Baltistan, with broad dry mountain valleys, rocky peaks, blue skies, and high-altitude terrain",
+    "Deosai National Park Pakistan": "Deosai National Park, a wide high-altitude plateau with open grassland, rounded mountains, and minimal trees",
+    "Malam Jabba Swat Pakistan": "Malam Jabba in Swat, a green forested mountain resort with rolling hills and cool highland scenery",
+    "Naran Kaghan Pakistan": "Naran Kaghan Valley, a green Himalayan valley with a river, pine forests, and steep mountain slopes",
+    "Kashmir Pakistan": "Kashmir, a lush mountain region with green valleys, rivers, forests, and layered Himalayan hills",
+    "Swat Valley Pakistan": "Swat Valley, a green valley with rivers, forests, farmland, and surrounding mountains",
 }
+
+
+def _gps_from_image(image: Any) -> dict[str, Any] | None:
+    """Read embedded GPS metadata when a camera or phone included it."""
+    try:
+        exif = image.getexif()
+        gps_info = exif.get(34853)
+        if not gps_info:
+            return None
+        gps = {ExifTags.GPSTAGS.get(key, key): value for key, value in gps_info.items()}
+        coordinates = gps.get("GPSLatitude"), gps.get("GPSLongitude")
+        if not all(coordinates) or not gps.get("GPSLatitudeRef") or not gps.get("GPSLongitudeRef"):
+            return None
+
+        def decimal(value: tuple[Any, Any, Any], reference: str) -> float:
+            degrees, minutes, seconds = [float(part) for part in value]
+            result = degrees + minutes / 60 + seconds / 3600
+            return -result if reference in ("S", "W") else result
+
+        latitude = decimal(coordinates[0], gps["GPSLatitudeRef"])
+        longitude = decimal(coordinates[1], gps["GPSLongitudeRef"])
+        return {"latitude": round(latitude, 6), "longitude": round(longitude, 6), "map_url": f"https://www.google.com/maps?q={latitude},{longitude}"}
+    except (AttributeError, KeyError, TypeError, ValueError, ZeroDivisionError):
+        return None
 
 
 @lru_cache(maxsize=1)
@@ -71,24 +106,27 @@ def recognize_landmark(image_bytes: bytes, api_key: str | None = None, model: st
         image = Image.open(BytesIO(image_bytes))
         if image.width < 20 or image.height < 20:
             return {"landmark": "Unknown", "confidence": 0.0, "low_confidence": True, "message": "Image is too small to analyze."}
+        metadata_location = _gps_from_image(image)
     except Exception as exc:
         return {"landmark": "Unknown", "confidence": 0.0, "low_confidence": True, "message": f"Image could not be read: {exc}"}
     if not api_key:
         try:
-            return _recognize_locally(image)
+            result = _recognize_locally(image)
+            result["metadata_location"] = metadata_location
+            return result
         except Exception as local_exc:
             return {"landmark": "Unknown image", "title": "Unknown image", "category": "unknown", "description": "The image was received but no local vision model was available.", "confidence": 0.0, "low_confidence": True, "message": f"No vision API key and local analysis failed: {local_exc}"}
     try:
         encoded = base64.b64encode(image_bytes).decode("ascii")
         image_format = image.format.lower() if image.format else "jpeg"
         mime_type = "jpeg" if image_format == "jpg" else image_format
-        response = requests.post("https://api.openai.com/v1/chat/completions", headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, json={"model": model or "gpt-4o-mini", "temperature": 0, "max_tokens": 240, "messages": [{"role": "system", "content": "Analyze any uploaded image. If it contains a recognizable landmark, identify it; otherwise describe the main subject. Return only valid JSON with keys title, category, description, landmark, confidence. Confidence must be 0 to 1 and must be below 0.6 when exact identification is uncertain. Never invent an exact landmark name."}, {"role": "user", "content": [{"type": "text", "text": "Tell me what is in this photo, what kind of image it is, and any visible landmark or important details."}, {"type": "image_url", "image_url": {"url": f"data:image/{mime_type};base64,{encoded}"}}]}]}, timeout=30)
+        response = requests.post("https://api.openai.com/v1/chat/completions", headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, json={"model": model or "gpt-4o-mini", "temperature": 0, "max_tokens": 300, "messages": [{"role": "system", "content": "Analyze any uploaded image. If it contains a recognizable landmark or nature scene, identify the most likely place. For an ordinary landscape, give a possible region or destination only when visual evidence supports it, and explain the clues. Return only valid JSON with keys title, category, description, landmark, confidence. Confidence must be 0 to 1 and must be below 0.6 when exact identification is uncertain. Never invent an exact landmark name or claim certainty from scenery alone."}, {"role": "user", "content": [{"type": "text", "text": "Tell me what is in this photo, what kind of image it is, the most likely place or possible region if supported, and the visual clues. For nature photos consider Hunza, Skardu, Swat, Naran Kaghan, Kashmir, and other likely regions, but say unknown when the image cannot establish a location."}, {"type": "image_url", "image_url": {"url": f"data:image/{mime_type};base64,{encoded}"}}]}]}, timeout=30)
         response.raise_for_status()
         content = response.json()["choices"][0]["message"]["content"]
         content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip(), flags=re.IGNORECASE)
         result = json.loads(content)
         confidence = max(0.0, min(1.0, float(result.get("confidence", 0))))
-        return {"landmark": result.get("landmark") or result.get("title", "Unknown landmark"), "title": result.get("title", "Image analysis"), "category": result.get("category", "image"), "description": result.get("description", "No description was returned."), "confidence": confidence, "low_confidence": confidence < 0.6, "message": "Analyzed with the vision model."}
+        return {"landmark": result.get("landmark") or result.get("title", "Unknown landmark"), "title": result.get("title", "Image analysis"), "category": result.get("category", "image"), "description": result.get("description", "No description was returned."), "confidence": confidence, "low_confidence": confidence < 0.6, "message": "Analyzed with the vision model.", "metadata_location": metadata_location}
     except requests.HTTPError as exc:
         if exc.response is not None and exc.response.status_code == 429:
             try:

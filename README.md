@@ -17,6 +17,8 @@ The project is designed as a Final Year Project (FYP) and keeps its core logic i
 - Smart budget breakdown and trip optimization
 - Smart packing assistant and destination food guide
 - Destination comparison, transport planner, nearby places, and downloadable travel guide
+- Advanced transport planner with route distance, travellers, one-way/return fares, travel time, budget fit, and sorting
+- Nearest and best hotel finder with rent, contact number, ratings, reviews, distance, and amenities
 - PDF itinerary export and saved favorite trips
 - Dark, tabbed Streamlit interface with system readiness status
 
@@ -28,7 +30,7 @@ The application is organized into focused tabs:
 | --- | --- |
 | AI Trip Planner | Chat-based multilingual planning and itinerary generation |
 | Trip Tools | Budget planner, packing assistant, food guide, PDF export, and favorites |
-| Travel Hub | Compare destinations, transport, nearby places, travel guide, My Trips, and dashboard |
+| Travel Hub | Compare destinations, hotel finder, transport, nearby places, travel guide, My Trips, and dashboard |
 | Live Weather | Current weather for a selected destination |
 | Image Recognition | Landmark identification and general image description |
 | System Status | Checks for database, RAG data, API keys, and fallback models |

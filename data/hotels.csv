@@ -1,0 +1,15 @@
+destination,name,address,contact_number,price_per_night,star_rating,guest_rating,review_count,latitude,longitude,amenities
+Hunza,Serena Altit Fort Residence,Karimabad Hunza,+92 5813 456789,28000,5,4.8,312,36.3167,74.6500,Mountain view | Breakfast | Wi-Fi | Parking
+Hunza,Hunza View Hotel,Karimabad Hunza,+92 5813 456781,8500,3,4.3,188,36.3160,74.6508,Valley view | Breakfast | Wi-Fi | Restaurant
+Skardu,Shangrila Resort Skardu,Lower Kachura Lake,+92 5815 454321,22000,4,4.5,421,35.2190,75.5530,Lake view | Restaurant | Parking | Room service
+Skardu,Hotel One Skardu,Airport Road Skardu,+92 5815 460001,10500,3,4.1,205,35.2970,75.6330,Wi-Fi | Breakfast | Parking | Heating
+Swat,Swat Serena Hotel,Mingora Swat,+92 946 711111,18000,4,4.4,276,34.7717,72.3600,Pool | Restaurant | Wi-Fi | Parking
+Swat,Mingora Swat Hotel,Mingora Bypass,+92 946 712222,6500,3,4.0,149,34.7800,72.3650,Breakfast | Wi-Fi | Family rooms | Parking
+Lahore,Pearl Continental Lahore,Shahrah-e-Quaid-e-Azam Lahore,+92 42 36310000,32000,5,4.5,1840,31.5204,74.3587,Pool | Gym | Restaurant | Wi-Fi
+Lahore,Shalimar Hotel Lahore,Near Shalimar Gardens Lahore,+92 42 36810000,9000,3,4.1,337,31.5880,74.3880,Breakfast | Wi-Fi | Parking | Restaurant
+Islamabad,Islamabad Serena Hotel,Khayaban-e-Suhrawardy Islamabad,+92 51 2874000,38000,5,4.7,2215,33.7240,73.0920,Spa | Pool | Gym | Wi-Fi
+Islamabad,Hotel Margala Islamabad,Shakarparian Road Islamabad,+92 51 2272000,11000,3,4.2,512,33.6930,73.0840,Restaurant | Breakfast | Wi-Fi | Parking
+Naran Kaghan,Pine Park Hotel Naran,Main Bazar Naran,+92 345 5550101,10000,3,4.2,96,34.9080,73.6500,River view | Breakfast | Parking | Heating
+Naran Kaghan,Arcadian Riverside Naran,Kaghan Road Naran,+92 345 5550102,19000,4,4.5,131,34.9100,73.6600,River view | Restaurant | Wi-Fi | Family rooms
+Chitral,Chitral Guest House,Chitral Town,+92 943 412345,7000,3,4.3,74,35.8500,71.7860,Breakfast | Wi-Fi | Garden | Parking
+Chitral,Hindukush Heights Chitral,Near Chitral Fort,+92 943 412346,14000,4,4.6,118,35.8520,71.7900,Mountain view | Restaurant | Wi-Fi | Heating

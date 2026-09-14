@@ -2,10 +2,14 @@
 import hashlib
 import io
 import textwrap
+import csv
+from math import asin, cos, radians, sin, sqrt
 import requests
 import streamlit as st
+from pathlib import Path
 
 from modules.database import destination_rows, favorite_rows, initialize_database, log_trip, save_favorite
+from modules.hotel_recommender import DESTINATION_COORDINATES, recommend_hotels
 from modules.nlp_processor import classify_intent, extract_entities
 from modules.rag_engine import format_context, load_documents, retrieve
 from modules.recommender import recommend_destinations, train_lightweight_ranker
@@ -19,6 +23,12 @@ def get_secret(name: str) -> str | None:
         return st.secrets.get(name)
     except Exception:
         return None
+
+
+def load_hotel_directory() -> list[dict]:
+    data_path = Path(__file__).resolve().parent / "data" / "hotels.csv"
+    with data_path.open(newline="", encoding="utf-8") as file:
+        return list(csv.DictReader(file))
 
 
 def get_weather(destination: str) -> str:
@@ -88,18 +98,60 @@ def compare_destinations(names: list[str], budget: int, duration: int) -> list[d
     return result
 
 
-def transport_options(destination: str) -> list[dict[str, str]]:
-    return [
-        {"mode": "Private car", "best_for": "Families and flexible stops", "estimate": "PKR 8,000-25,000/day"},
-        {"mode": "Bus or coach", "best_for": "Budget travel", "estimate": "Check current operator fares"},
-        {"mode": "Domestic flight", "best_for": "Long-distance routes", "estimate": "Check airline fare for your date"},
-        {"mode": "Local ride-hailing", "best_for": f"Getting around {destination}", "estimate": "Use live in-app fare before booking"},
-    ]
+def transport_options(origin: str, destination: str, travelers: int, trip_type: str, budget: int) -> list[dict]:
+    coordinates = {**DESTINATION_COORDINATES, "Current location": (33.6844, 73.0479)}
+    start = coordinates.get(origin, coordinates["Current location"])
+    end = coordinates.get(destination, coordinates["Current location"])
+    lat_gap = radians(end[0] - start[0])
+    lon_gap = radians(end[1] - start[1])
+    distance = round(6371 * 2 * asin(sqrt(sin(lat_gap / 2) ** 2 + cos(radians(start[0])) * cos(radians(end[0])) * sin(lon_gap / 2) ** 2)))
+    multiplier = 2 if trip_type == "Return trip" else 1
+    same_city = origin == destination
+    options = []
+    if same_city:
+        options.append({"mode": "Ride-hailing", "best_for": "Short city travel", "cost": 900 * multiplier, "hours": 0.5, "note": "Book after checking the live in-app fare."})
+    else:
+        options.extend([
+            {"mode": "Private car", "best_for": "Families and flexible stops", "cost": max(4500, round(distance * 65 + 2500)) * multiplier, "hours": max(1.0, distance / 55), "note": "Fuel, tolls and driver terms can change the quote."},
+            {"mode": "Bus or coach", "best_for": "Lowest intercity cost", "cost": max(800, round(distance * 5.5)) * travelers * multiplier, "hours": max(2.0, distance / 45), "note": "Confirm operator schedule and seat availability."},
+            {"mode": "Domestic flight", "best_for": "Long-distance routes", "cost": max(8000, round(distance * 12)) * travelers * multiplier, "hours": max(1.0, distance / 600 + 2), "note": "Fare excludes airport transfers and baggage changes."},
+        ])
+    for option in options:
+        option["distance_km"] = distance
+        option["per_person"] = round(option["cost"] / max(travelers, 1))
+        option["budget_fit"] = max(0, min(100, round((1 - abs(option["cost"] - budget) / max(budget, 1)) * 100))) if budget else None
+    return options
 
 
 def nearby_places(destination: str) -> list[str]:
     nearby = {"Lahore": ["Badshahi Mosque", "Lahore Fort", "Walled City", "Food Street"], "Islamabad": ["Faisal Mosque", "Daman-e-Koh", "Pakistan Monument", "Saidpur Village"], "Hunza": ["Attabad Lake", "Baltit Fort", "Altit Fort", "Passu Cones"], "Skardu": ["Shangrila Resort", "Upper Kachura Lake", "Deosai Plains", "Mansehra viewpoints"]}
     return nearby.get(destination, [f"Verified local attractions near {destination}", "Local market or cultural center", "A nearby viewpoint", "A recommended day trip"])
+
+
+def nearby_place_details(destination: str) -> list[dict[str, str]]:
+    details = {
+        "Lahore": {
+            "Badshahi Mosque": ("https://images.unsplash.com/photo-1584551246679-0daf3d275d0f?auto=format&fit=crop&w=900&q=80", "Mughal-era mosque beside Lahore Fort.", "Old Lahore · 1-2 hours · Best near sunset", "Respect prayer times and dress modestly."),
+            "Lahore Fort": ("https://images.unsplash.com/photo-1593693397690-362cb9666fc2?auto=format&fit=crop&w=900&q=80", "Historic citadel with palaces, courtyards and gateways.", "Walled City · 2-3 hours · Go early", "Check opening days and carry water."),
+            "Walled City": ("https://images.unsplash.com/photo-1539650116574-75c0c6d73f6e?auto=format&fit=crop&w=900&q=80", "Atmospheric lanes filled with heritage, markets and local food.", "Central Lahore · 2-4 hours · Walking route", "Use a local guide and keep valuables secure."),
+            "Food Street": ("https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?auto=format&fit=crop&w=900&q=80", "A lively food stop for Lahori barbecue and traditional dishes.", "Fort Road · 1-2 hours · Evening", "Confirm restaurant prices before ordering."),
+        },
+        "Islamabad": {
+            "Faisal Mosque": ("https://images.unsplash.com/photo-1584551246679-0daf3d275d0f?auto=format&fit=crop&w=900&q=80", "An iconic modern mosque framed by the Margalla Hills.", "E-8 · 1 hour · Morning or sunset", "Follow visitor areas and prayer-time guidance."),
+            "Daman-e-Koh": ("https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=900&q=80", "A hilltop viewpoint overlooking Islamabad.", "Margalla Hills · 2-3 hours · Clear weather", "Roads can be busy on weekends; carry water."),
+            "Pakistan Monument": ("https://images.unsplash.com/photo-1539650116574-75c0c6d73f6e?auto=format&fit=crop&w=900&q=80", "A national monument and museum on Shakarparian Hills.", "Shakarparian · 1-2 hours · Afternoon", "Verify museum hours before visiting."),
+            "Saidpur Village": ("https://images.unsplash.com/photo-1516026672322-bc52d61a55d5?auto=format&fit=crop&w=900&q=80", "A restored heritage village with cafés and hill views.", "Margalla foothills · 1-2 hours · Evening", "Expect crowded parking at peak times."),
+        },
+        "Hunza": {
+            "Attabad Lake": ("https://images.unsplash.com/photo-1464278533981-50106e6176b1?auto=format&fit=crop&w=900&q=80", "Turquoise alpine lake known for boating and dramatic views.", "Gojal · Half day · Daylight", "Wear layers and check road conditions."),
+            "Baltit Fort": ("https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=900&q=80", "A centuries-old fort overlooking Karimabad and the valley.", "Karimabad · 1-2 hours · Morning", "The uphill walk needs comfortable shoes."),
+            "Altit Fort": ("https://images.unsplash.com/photo-1516026672322-bc52d61a55d5?auto=format&fit=crop&w=900&q=80", "A heritage fort and village with wide valley viewpoints.", "Altit · 1-2 hours · Afternoon", "Allow time for the surrounding village walk."),
+            "Passu Cones": ("https://images.unsplash.com/photo-1464278533981-50106e6176b1?auto=format&fit=crop&w=900&q=80", "Distinctive jagged peaks along the Karakoram Highway.", "Gojal · 1-2 hours · Clear daylight", "Keep distance from unstable roadside areas."),
+        },
+    }
+    fallback_image = "https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=900&q=80"
+    places = nearby_places(destination)
+    return [{"name": place, "image": details.get(destination, {}).get(place, (fallback_image, f"A recommended place to explore near {destination}.", "Nearby attraction · Check locally", "Confirm access, timings and current conditions before visiting."))[0], "description": details.get(destination, {}).get(place, ("", f"A recommended place to explore near {destination}.", "Nearby attraction · Check locally", "Confirm access, timings and current conditions before visiting."))[1], "visit": details.get(destination, {}).get(place, ("", "", "Nearby attraction · Check locally", "Confirm access, timings and current conditions before visiting."))[2], "tip": details.get(destination, {}).get(place, ("", "", "", "Confirm access, timings and current conditions before visiting."))[3]} for place in places]
 
 
 def travel_guide(destination: str, entities: dict) -> str:
@@ -172,11 +224,16 @@ def inject_theme() -> None:
     .stTabs [data-baseweb="tab-list"] { gap:0; border-bottom:1px solid var(--line); }
     .stTabs [data-baseweb="tab"] { color:var(--muted); padding:1rem 1.1rem; font-weight:600; }
     .stTabs [aria-selected="true"] { color:var(--blue2) !important; border-bottom:2px solid var(--blue2); }
+    [data-testid="stRadio"] > div { gap:.15rem; border-bottom:1px solid var(--line); overflow-x:auto; }
+    [data-testid="stRadio"] label { color:var(--muted) !important; padding:.8rem 1rem; font-weight:600; white-space:nowrap; border-bottom:2px solid transparent; }
+    [data-testid="stRadio"] label:has(input:checked) { color:var(--blue2) !important; border-bottom-color:var(--blue2); }
+    [data-testid="stRadio"] label > div:first-child { display:none; }
     .stButton > button { background:transparent; color:var(--text); border:1px solid #40516b; border-radius:7px; font-weight:600; }
     .stButton > button:hover { color:white; border-color:var(--blue2); background:#203653; }
     button[kind="primary"] { background:var(--blue) !important; border-color:var(--blue) !important; }
     [data-baseweb="input"], [data-baseweb="select"] > div, [data-testid="stTextInput"] input { background:var(--panel2); border-color:var(--line); color:var(--text); }
     [data-baseweb="input"] input, [data-testid="stTextInput"] input, [data-testid="stChatInput"] textarea { color:#f5f7fb !important; -webkit-text-fill-color:#f5f7fb !important; caret-color:#19a9e8; }
+    [data-testid="stNumberInput"] input { color:#17304d !important; -webkit-text-fill-color:#17304d !important; caret-color:#078fd0; }
     [data-baseweb="input"] input::placeholder, [data-testid="stTextInput"] input::placeholder, [data-testid="stChatInput"] textarea::placeholder { color:#b7c2d2 !important; opacity:1 !important; -webkit-text-fill-color:#b7c2d2 !important; }
     [data-testid="stChatInput"] > div, [data-testid="stChatInput"] textarea { background:#1e2d45 !important; border-color:#19a9e8 !important; }
     [data-baseweb="select"] span, [data-baseweb="select"] input { color:#f5f7fb !important; -webkit-text-fill-color:#f5f7fb !important; }
@@ -331,7 +388,7 @@ with tab_tools:
         st.subheader("🧭 Travel Hub")
         hub_entities = st.session_state.extracted_entities
         hub_destination = hub_entities.get("destination") or st.text_input("Choose a destination for travel tools", value="Lahore", key="hub_destination")
-        hub_view = st.selectbox("Open tool", ["⚖️ Compare Destinations", "🚗 Transport Planner", "📍 Explore Nearby", "📄 Travel Guide", "❤️ My Trips", "📊 Trip Dashboard"], key="hub_view")
+        hub_view = st.radio("Open tool", ["⚖️ Compare Destinations", "🏨 Hotel Finder", "🚗 Transport Planner", "📍 Explore Nearby", "📄 Travel Guide", "❤️ My Trips", "📊 Trip Dashboard"], horizontal=True, label_visibility="collapsed", key="hub_view")
 
         if hub_view == "⚖️ Compare Destinations":
             st.markdown("### ⚖️ Compare Destinations")
@@ -344,16 +401,82 @@ with tab_tools:
             else:
                 st.info("Select at least two destinations to compare.")
 
+        elif hub_view == "🏨 Hotel Finder":
+            st.markdown("### 🏨 Nearest & Best Hotels")
+            st.caption("Local planning directory. Confirm availability, price and contact details before booking.")
+            hotel_destinations = list(DESTINATION_COORDINATES)
+            hotel_destination = st.selectbox("Where are you staying?", hotel_destinations, index=hotel_destinations.index(hub_destination) if hub_destination in hotel_destinations else 0, key="hotel_destination")
+            hotel_budget = st.number_input("Preferred rent per night (PKR)", min_value=0, value=0, step=1000, help="Use 0 to show the best options at every price.", key="hotel_budget")
+            hotel_limit = st.slider("Hotels to show", min_value=1, max_value=5, value=3, key="hotel_limit")
+            hotel_results = recommend_hotels(hotel_destination, load_hotel_directory(), hotel_budget or None, hotel_limit)
+            hotel_columns = st.columns(min(3, len(hotel_results))) if hotel_results else []
+            for index, hotel in enumerate(hotel_results):
+                with hotel_columns[index % len(hotel_columns)]:
+                    st.markdown(
+                        f"<div class='card'><h3>{hotel['name']}</h3>"
+                        f"<p>📍 {hotel['address']}<br>📞 {hotel['contact_number']}</p>"
+                        f"<b>PKR {float(hotel['price_per_night']):,.0f} / night</b><br>"
+                        f"⭐ {float(hotel['guest_rating']):.1f}/5 ({int(hotel['review_count'])} reviews) · {float(hotel['star_rating']):.0f}-star<br>"
+                        f"🚗 {float(hotel['distance_km']):.1f} km from destination center<br>"
+                        f"<span>{hotel['amenities'].replace(' | ', ' · ')}</span></div>", unsafe_allow_html=True)
+
         elif hub_view == "🚗 Transport Planner":
             st.markdown(f"### 🚗 Transport Planner for {hub_destination}")
-            for option in transport_options(hub_destination):
-                st.markdown(f"<div class='metric'><b>{option['mode']}</b><br><span>{option['best_for']} · {option['estimate']}</span></div>", unsafe_allow_html=True)
-            st.caption("Prices are planning estimates. Confirm current fares with the operator before booking.")
+            route_locations = ["Current location"] + list(DESTINATION_COORDINATES)
+            route_left, route_right = st.columns(2)
+            with route_left:
+                origin = st.selectbox("Starting point", route_locations, index=0, key="transport_origin")
+                travelers = st.number_input("Travellers", min_value=1, max_value=20, value=2, step=1, key="transport_travelers")
+            with route_right:
+                route_destination = st.selectbox("Destination", list(DESTINATION_COORDINATES), index=list(DESTINATION_COORDINATES).index(hub_destination) if hub_destination in DESTINATION_COORDINATES else 0, key="transport_destination")
+                trip_type = st.selectbox("Trip type", ["One-way", "Return trip"], key="transport_trip_type")
+            transport_budget = st.number_input("Transport budget (PKR)", min_value=0, value=0, step=1000, help="Use 0 to compare without a budget filter.", key="transport_budget")
+            transport_sort = st.selectbox("Prioritize", ["Best overall", "Lowest total fare", "Fastest route", "Lowest fare per person"], key="transport_sort")
+            options = transport_options(origin, route_destination, int(travelers), trip_type, int(transport_budget))
+            sort_keys = {
+                "Best overall": lambda item: (item["budget_fit"] if item["budget_fit"] is not None else 50, -item["cost"]),
+                "Lowest total fare": lambda item: item["cost"],
+                "Fastest route": lambda item: item["hours"],
+                "Lowest fare per person": lambda item: item["per_person"],
+            }
+            options = sorted(options, key=sort_keys[transport_sort], reverse=transport_sort == "Best overall")
+            if options:
+                transport_columns = st.columns(min(3, len(options)))
+                for index, option in enumerate(options):
+                    duration = f"{option['hours']:.1f} hr" if option["hours"] < 10 else f"{option['hours']:.0f} hr"
+                    budget_line = f" · Budget fit: {option['budget_fit']}%" if option["budget_fit"] is not None else ""
+                    with transport_columns[index % len(transport_columns)]:
+                        st.markdown(
+                            f"<div class='card'><h3>{option['mode']}</h3>"
+                            f"<b>PKR {option['cost']:,} total</b><br>"
+                            f"PKR {option['per_person']:,} per person{budget_line}<br>"
+                            f"📍 {option['distance_km']:,} km · ⏱️ {duration}<br>"
+                            f"<span>Best for: {option['best_for']}<br>{option['note']}</span></div>", unsafe_allow_html=True)
+            st.caption("Planning estimates only. Confirm live fares, schedules, road conditions and availability before booking.")
 
         elif hub_view == "📍 Explore Nearby":
             st.markdown(f"### 📍 Explore Nearby: {hub_destination}")
-            for place in nearby_places(hub_destination):
-                st.markdown(f"<div class='metric'>📍 {place}</div>", unsafe_allow_html=True)
+            place_details = nearby_place_details(hub_destination)
+            place_names = [place["name"] for place in place_details]
+            selected_place = st.session_state.get("selected_nearby_place", place_names[0])
+            if selected_place not in place_names:
+                selected_place = place_names[0]
+            place_columns = st.columns(min(2, len(place_details)))
+            for index, place in enumerate(place_details):
+                with place_columns[index % len(place_columns)]:
+                    if st.button(f"📍 {place['name']}", key=f"nearby_{hub_destination}_{index}", use_container_width=True):
+                        st.session_state.selected_nearby_place = place["name"]
+                        st.rerun()
+            selected = next(place for place in place_details if place["name"] == selected_place)
+            st.markdown(f"### 📷 {selected['name']}")
+            detail_left, detail_right = st.columns([1.2, 1])
+            with detail_left:
+                st.image(selected["image"], use_container_width=True)
+            with detail_right:
+                st.markdown(f"**{selected['description']}**")
+                st.markdown(f"📌 **Plan:** {selected['visit']}")
+                st.markdown(f"💡 **Visitor tip:** {selected['tip']}")
+                st.caption("Photo is loaded from a public image service. Confirm current access, timings and local conditions before visiting.")
 
         elif hub_view == "📄 Travel Guide":
             st.markdown(f"### 📄 Travel Guide: {hub_destination}")
@@ -373,17 +496,38 @@ with tab_tools:
         elif hub_view == "📊 Trip Dashboard":
             st.markdown("### 📊 Trip Dashboard")
             trips = favorite_rows()
-            total_saved = len(trips)
-            total_budget = sum(float(trip["total_budget"]) for trip in trips)
-            dashboard_cols = st.columns(4)
-            dashboard_cols[0].metric("Saved trips", total_saved)
-            dashboard_cols[1].metric("Destinations", len({trip["destination"] for trip in trips}))
-            dashboard_cols[2].metric("Planned budget", f"PKR {total_budget:,.0f}")
-            dashboard_cols[3].metric("Current days", int(hub_entities.get("duration", duration_filter)))
-            if trips:
+            if not trips:
+                st.info("No saved trips yet. Generate an itinerary and save it from Trip Tools to populate your dashboard.")
+            else:
+                destination_filter = st.selectbox("Filter by destination", ["All destinations"] + sorted({trip["destination"] for trip in trips}), key="dashboard_destination_filter")
+                filtered_trips = trips if destination_filter == "All destinations" else [trip for trip in trips if trip["destination"] == destination_filter]
+                total_budget = sum(float(trip["total_budget"]) for trip in filtered_trips)
+                average_budget = total_budget / len(filtered_trips)
+                average_days = sum(int(trip["duration_days"]) for trip in filtered_trips) / len(filtered_trips)
+                destination_counts = {}
+                for trip in filtered_trips:
+                    destination_counts[trip["destination"]] = destination_counts.get(trip["destination"], 0) + 1
+                top_destination = max(destination_counts, key=destination_counts.get)
+                dashboard_cols = st.columns(4)
+                dashboard_cols[0].metric("Saved trips", len(filtered_trips))
+                dashboard_cols[1].metric("Planned budget", f"PKR {total_budget:,.0f}")
+                dashboard_cols[2].metric("Average budget", f"PKR {average_budget:,.0f}")
+                dashboard_cols[3].metric("Average duration", f"{average_days:.1f} days")
+                st.markdown(f"#### Most planned destination: {top_destination}")
+                budget_by_destination = {}
+                for trip in filtered_trips:
+                    budget_by_destination[trip["destination"]] = budget_by_destination.get(trip["destination"], 0) + float(trip["total_budget"])
+                st.bar_chart(budget_by_destination, y_label="Budget (PKR)", color="#19a9e8")
                 st.markdown("#### Recent trip activity")
-                for trip in trips[:5]:
-                    st.markdown(f"- **{trip['destination']}** · {trip['duration_days']} days · PKR {trip['total_budget']:,}")
+                search = st.text_input("Search saved trips", placeholder="Destination name...", key="dashboard_trip_search").strip().casefold()
+                visible_trips = [trip for trip in filtered_trips if not search or search in trip["destination"].casefold()]
+                table_rows = [{"Destination": trip["destination"], "Days": int(trip["duration_days"]), "Budget (PKR)": float(trip["total_budget"]), "Created": trip["created_at"][:10]} for trip in visible_trips]
+                st.dataframe(table_rows, use_container_width=True, hide_index=True)
+                export_data = io.StringIO()
+                writer = csv.DictWriter(export_data, fieldnames=["Destination", "Days", "Budget (PKR)", "Created"])
+                writer.writeheader()
+                writer.writerows(table_rows)
+                st.download_button("📥 Export dashboard CSV", data=export_data.getvalue(), file_name="trip_dashboard.csv", mime="text/csv", use_container_width=True)
 
 with tab_weather:
     st.subheader("🌤️ Live Weather")
@@ -396,7 +540,7 @@ with tab_weather:
 
 with tab_landmark:
     st.subheader("📷 Image & Landmark Recognition")
-    st.caption("Upload any photo. The tool describes the image and identifies a landmark when one is visible.")
+    st.caption("Upload a nature, mountain, lake or landmark photo. The tool gives the most likely place, visual clues and confidence.")
     upload = st.file_uploader("Upload landmark image", type=["jpg", "jpeg", "png"], key="landmark_upload")
     if upload is not None:
         image_bytes = upload.getvalue()
@@ -409,12 +553,31 @@ with tab_landmark:
             st.session_state.landmark_result = recognize_landmark(image_bytes, get_secret("OPENAI_API_KEY"), get_secret("OPENAI_MODEL"))
     if st.session_state.landmark_result:
         result = st.session_state.landmark_result
+        confidence = max(0.0, min(1.0, float(result.get("confidence", 0))))
+        st.markdown("#### Analysis confidence")
+        st.progress(confidence, text=f"{confidence:.0%} confidence")
         if result["low_confidence"]:
-            st.warning(f"Low confidence: {result['message']}")
-            st.markdown(f"**Possible category:** {result.get('category', 'image')}  \n**What I see:** {result.get('description', 'The image could not be identified confidently.')}")
+            st.warning(f"Possible match, low confidence: {result['message']}")
+            st.markdown(f"**Possible place/category:** {result.get('landmark', result.get('category', 'image'))}  \n**What I see:** {result.get('description', 'The image could not be identified confidently.')}")
         else:
             st.success(f"{result.get('title', result['landmark'])} ({result['confidence']:.0%})")
-            st.markdown(f"**Category:** {result.get('category', 'image')}  \n**What I see:** {result.get('description', result['message'])}")
+            st.markdown(f"**Likely place:** {result.get('landmark', result.get('title', 'Image analysis'))}  \n**Category:** {result.get('category', 'image')}  \n**What I see:** {result.get('description', result['message'])}")
+        metadata_location = result.get("metadata_location")
+        if metadata_location:
+            st.info(f"GPS metadata found in the image: {metadata_location['latitude']}, {metadata_location['longitude']}")
+            st.markdown(f"[Open embedded location in Google Maps]({metadata_location['map_url']})")
+        else:
+            st.caption("No GPS metadata was found. The location above is based on visual evidence only.")
+        report = (
+            f"Landmark Recognition Report\n\n"
+            f"Likely place: {result.get('landmark', 'Unknown')}\n"
+            f"Category: {result.get('category', 'Unknown')}\n"
+            f"Confidence: {confidence:.0%}\n"
+            f"Description: {result.get('description', 'No description available.')}\n"
+        )
+        if metadata_location:
+            report += f"GPS: {metadata_location['latitude']}, {metadata_location['longitude']}\n"
+        st.download_button("📄 Download analysis report", data=report, file_name="landmark_analysis.txt", mime="text/plain", key="download_landmark_report")
 
 with tab_status:
     st.subheader("💻 System Status")
