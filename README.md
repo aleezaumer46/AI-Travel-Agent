@@ -24,6 +24,7 @@ The project is designed as a Final Year Project (FYP) and keeps its core logic i
 - Complete plan output now includes starting point, traveller count, one-way/return transport, hotel address, phone, amenities, rating, nightly rent, and total stay estimate
 - PDF itinerary export and saved favorite trips
 - Dark, tabbed Streamlit interface with system readiness status
+- Travel OS workspace covering interactive destination mapping, discovery, currency conversion, expense tracking, group splitting, adaptive packing, weather-aware daily planning, translation phrasebook, visual translation, safety guidance, emergency contacts, saved places, document records, reminders, offline guide export, and trip progress tracking
 
 ## Application Tools
 
@@ -36,6 +37,7 @@ The application is organized into focused tabs:
 | Travel Hub | Compare destinations, hotel finder, transport, nearby places, travel guide, My Trips, and dashboard |
 | Live Weather | Current weather for a selected destination |
 | Image Recognition | Landmark identification and general image description |
+| Travel OS | Map, discovery, money, packing, language, safety, documents, reminders, saved places, offline guide, and trip progress |
 | System Status | Checks for database, RAG data, API keys, and fallback models |
 
 ## Technology Stack

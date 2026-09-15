@@ -136,3 +136,43 @@ def recognize_landmark(image_bytes: bytes, api_key: str | None = None, model: st
         return {"landmark": "Unknown landmark", "confidence": 0.0, "low_confidence": True, "message": f"Vision provider rejected the request ({exc.response.status_code if exc.response is not None else 'HTTP error'})."}
     except (requests.RequestException, KeyError, ValueError, json.JSONDecodeError) as exc:
         return {"landmark": "Unknown landmark", "confidence": 0.0, "low_confidence": True, "message": f"Vision analysis failed safely: {exc}"}
+
+
+def describe_image(image_bytes: bytes, api_key: str | None = None, model: str | None = None) -> dict[str, str]:
+    """Return a practical travel-focused description of everything visible in an image."""
+    def offline_description(message: str) -> dict[str, str]:
+        try:
+            result = recognize_landmark(image_bytes, None, None)
+            category = result.get("category", "image")
+            label = result.get("landmark", "an unknown image")
+            return {"summary": f"Offline visual match: {label}.", "objects": f"The offline model classified this as {category}.", "food_or_items": "Not available in offline mode.", "setting": result.get("description", "Broad visual category only."), "visible_text": "Text reading is not available in offline mode.", "travel_context": message}
+        except Exception:
+            return {"description": "Detailed image analysis is temporarily unavailable.", "message": message}
+
+    if not api_key:
+        return offline_description("Configure OPENAI_API_KEY for object-level image details and text reading.")
+    try:
+        from PIL import Image
+        image = Image.open(BytesIO(image_bytes))
+        encoded = base64.b64encode(image_bytes).decode("ascii")
+        image_format = image.format.lower() if image.format else "jpeg"
+        mime_type = "jpeg" if image_format == "jpg" else image_format
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={"model": model or "gpt-4o-mini", "temperature": 0, "max_tokens": 450, "messages": [
+                {"role": "system", "content": "Describe the uploaded travel image accurately. Return valid JSON with keys: summary, objects, food_or_items, setting, visible_text, travel_context. Use short strings, do not invent details, and say 'Not visible' when uncertain."},
+                {"role": "user", "content": [{"type": "text", "text": "What exactly is visible in this photo? List the main objects or food, describe the setting, transcribe readable signs or menu text, and give useful travel context."}, {"type": "image_url", "image_url": {"url": f"data:image/{mime_type};base64,{encoded}"}}]},
+            ]},
+            timeout=30,
+        )
+        response.raise_for_status()
+        content = re.sub(r"^```(?:json)?\s*|\s*```$", "", response.json()["choices"][0]["message"]["content"].strip(), flags=re.IGNORECASE)
+        result = json.loads(content)
+        return {key: str(result.get(key) or "Not visible") for key in ("summary", "objects", "food_or_items", "setting", "visible_text", "travel_context")}
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 429:
+            return offline_description("OpenAI rate limit or quota reached. Showing the offline visual fallback; check billing, usage limits, or wait before trying again.")
+        return offline_description(f"OpenAI rejected the image request ({exc.response.status_code if exc.response is not None else 'HTTP error'}).")
+    except (requests.RequestException, KeyError, ValueError, json.JSONDecodeError, OSError) as exc:
+        return offline_description(f"Detailed image service unavailable. Showing offline visual fallback: {exc}")

@@ -8,6 +8,11 @@ import requests
 import streamlit as st
 from pathlib import Path
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover
+    import tomli as tomllib
+
 from modules import database
 
 destination_rows = database.destination_rows
@@ -15,6 +20,17 @@ favorite_rows = database.favorite_rows
 initialize_database = database.initialize_database
 log_trip = database.log_trip
 save_favorite = database.save_favorite
+add_expense = database.add_expense
+expense_rows = database.expense_rows
+save_place = database.save_place
+saved_place_rows = database.saved_place_rows
+save_checklist_item = database.save_checklist_item
+checklist_rows = database.checklist_rows
+set_checklist_item = database.set_checklist_item
+add_document = database.add_document
+document_rows = database.document_rows
+add_reminder = database.add_reminder
+reminder_rows = database.reminder_rows
 def _booking_feature_unavailable(_booking: dict) -> str:
     raise RuntimeError("The deployed database module is outdated. Redeploy the latest GitHub commit.")
 
@@ -25,16 +41,30 @@ from modules.hotel_recommender import DESTINATION_COORDINATES, recommend_hotels
 from modules.nlp_processor import classify_intent, extract_entities
 from modules.rag_engine import format_context, load_documents, retrieve
 from modules.recommender import recommend_destinations, train_lightweight_ranker
-from modules.vision import recognize_landmark
+from modules.vision import describe_image, recognize_landmark
 
 st.set_page_config(page_title="AI Travel Agent", page_icon="✈️", layout="wide", initial_sidebar_state="expanded")
 
 
 def get_secret(name: str) -> str | None:
     try:
-        return st.secrets.get(name)
+        value = st.secrets.get(name)
+        if value:
+            return value
     except Exception:
-        return None
+        pass
+
+    secrets_path = Path(__file__).resolve().parent / ".streamlit" / "secrets.toml"
+    try:
+        if secrets_path.exists():
+            with secrets_path.open("rb") as file:
+                data = tomllib.load(file)
+            value = data.get(name)
+            if value:
+                return value
+    except Exception:
+        pass
+    return None
 
 
 def load_hotel_directory() -> list[dict]:
@@ -103,6 +133,92 @@ def food_recommendations(destination: str, interests: list[str]) -> list[str]:
         "Skardu": ["Balti cuisine", "Apricot soup", "Momos", "Local trout"],
     }
     return food_map.get(destination, [f"Try verified local specialties in {destination}", "Ask your hotel for hygienic family restaurants", "Keep one flexible meal for local discovery"])
+
+
+def convert_currency(amount: float, source: str, target: str) -> float:
+    rates = {"PKR": 1.0, "USD": 0.0036, "EUR": 0.0033, "GBP": 0.0028, "AED": 0.0132, "TRY": 0.12}
+    return amount * rates.get(source, 1.0) / rates.get(target, 1.0)
+
+
+def local_phrases(language: str) -> list[tuple[str, str]]:
+    phrase_sets = {"Urdu": [("Hello", "Assalam-o-alaikum"), ("How much?", "Yeh kitne ka hai?"), ("Help", "Madad kijiye"), ("Where is the hotel?", "Hotel kahan hai?")], "Arabic": [("Hello", "Marhaba"), ("How much?", "Kam al-sear?"), ("Help", "Musaada"), ("Where is the hotel?", "Ayna al-funduq?")], "Turkish": [("Hello", "Merhaba"), ("How much?", "Ne kadar?"), ("Help", "Yardim edin"), ("Where is the hotel?", "Otel nerede?")]}
+    return phrase_sets.get(language, [("Hello", "Hello"), ("How much?", "How much?"), ("Help", "Please help"), ("Where is the hotel?", "Where is the hotel?")])
+
+
+def is_roman_urdu(text: str) -> bool:
+    roman_words = {"ma", "mein", "ka", "ki", "ke", "kahan", "kon", "sa", "hai", "ha", "mujhy", "mujhe", "chahiye", "kitna", "kitne", "acha", "qareeb", "sab", "se", "batao", "karo", "karna"}
+    words = set(re.findall(r"[a-z]+", text.casefold()))
+    return len(words & roman_words) >= 2
+
+
+def translate_phrase(text: str, target_language: str) -> tuple[str, str]:
+    """Translate a travel phrase with OpenAI and keep useful offline fallbacks."""
+    phrase = text.strip()
+    if not phrase:
+        return "", "Enter a phrase to translate."
+    roman_input = is_roman_urdu(phrase)
+    requested_language = target_language
+    if roman_input:
+        target_language = "English"
+    if target_language == "English" and not roman_input:
+        return phrase, "English is already the selected language."
+    key = get_secret("OPENAI_API_KEY")
+    if key:
+        try:
+            from openai import OpenAI
+            response = OpenAI(api_key=key).chat.completions.create(
+                model=get_secret("OPENAI_MODEL") or "gpt-4o-mini",
+                temperature=0,
+                max_tokens=180,
+                messages=[
+                    {"role": "system", "content": f"Translate the user's travel phrase into {target_language}. Return only the translation, with no explanation."},
+                    {"role": "user", "content": phrase},
+                ],
+            )
+            translated = (response.choices[0].message.content or "").strip()
+            if translated:
+                return translated, "Translated with the configured AI translation service."
+        except Exception:
+            pass
+    fallback_phrases = {
+        "English": {
+            "islamabad ma kon sa best hotel ha": "Which is the best hotel in Islamabad?",
+            "islamabad mein kon sa best hotel hai": "Which is the best hotel in Islamabad?",
+            "how much does this taxi cost": "How much does this taxi cost?",
+            "mujhe aik kamra chahiye": "I need a room.",
+            "hotel kahan hai": "Where is the hotel?",
+        },
+        "Urdu": {
+            "how much does this taxi cost?": "Yeh taxi kitne ki hai?",
+            "how much?": "Yeh kitne ka hai?",
+            "where is the hotel?": "Hotel kahan hai?",
+            "please help me": "Barah-e-karam meri madad karein.",
+            "i need a room": "Mujhe aik kamra chahiye.",
+            "where is the bathroom?": "Bathroom kahan hai?",
+        },
+        "Arabic": {
+            "how much does this taxi cost?": "كم تكلفة سيارة الأجرة؟",
+            "how much?": "كم السعر؟",
+            "where is the hotel?": "أين الفندق؟",
+            "please help me": "من فضلك ساعدني.",
+        },
+        "Turkish": {
+            "how much does this taxi cost?": "Bu taksi ne kadar?",
+            "how much?": "Ne kadar?",
+            "where is the hotel?": "Otel nerede?",
+            "please help me": "Lütfen bana yardım edin.",
+        },
+    }
+    translated = fallback_phrases.get(target_language, {}).get(phrase.casefold())
+    if translated:
+        return translated, "Translated with the offline travel phrasebook."
+    if roman_input and requested_language != "English":
+        return phrase, "Roman Urdu detected. Add an OpenAI API key for free-form Roman Urdu to English translation."
+    return phrase, f"No offline match found. Add an OpenAI API key for free-form {target_language} translation."
+
+
+def safety_brief(destination: str) -> list[str]:
+    return [f"Save local emergency numbers for {destination} before departure.", "Use registered transport and agree the fare before moving.", "Keep a digital copy of passport, visa and insurance separately.", "Avoid isolated routes after dark and share your live route with a trusted contact.", "Common scam signals: urgent payment requests, fake guides, over-friendly diversions and unmetered fares."]
 
 
 def daily_trip_schedule(entities: dict) -> str:
@@ -363,6 +479,19 @@ def inject_theme() -> None:
     .assistant-hero h1 { font-size: clamp(2.3rem, 4vw, 4rem) !important; letter-spacing:-0.06em; margin: 0 0 1.5rem; font-weight: 700; color: #171b1d !important; }
     .assistant-hero h1, h3, .stMarkdown h3, [data-testid="stMarkdownContainer"] h3 { color: #171b1d !important; }
     .stMarkdown h3 { color: #171b1d !important; }
+    .home-hero { min-height: 380px; padding: 3rem; margin: .5rem 0 1.5rem; border-radius: 18px; background: linear-gradient(100deg, rgba(10,31,37,.92), rgba(10,31,37,.46)), url('https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?auto=format&fit=crop&w=1800&q=85') center/cover; display:flex; align-items:flex-end; }
+    .home-hero h1, .home-hero h1 * { color:#ffffff !important; -webkit-text-fill-color:#ffffff !important; text-shadow:0 2px 12px rgba(0,0,0,.45); font-size:clamp(2.5rem, 5vw, 5.2rem) !important; line-height:1.02; max-width:760px; margin:0; letter-spacing:-.055em; }
+    .home-hero p, .home-hero p * { color:#f2faf7 !important; -webkit-text-fill-color:#f2faf7 !important; max-width:620px; font-size:1.08rem; margin:.9rem 0 0; text-shadow:0 1px 7px rgba(0,0,0,.35); }
+    .home-eyebrow, .home-eyebrow * { color:#b8f5d6 !important; -webkit-text-fill-color:#b8f5d6 !important; text-transform:uppercase; letter-spacing:.14em; font-size:.75rem; font-weight:700; }
+    .home-panel { background:#e3ebe6; border:1px solid rgba(31,35,35,.08); border-radius:12px; padding:1.15rem; min-height:126px; }
+    .home-panel h3 { margin:.25rem 0 .45rem; font-size:1.05rem !important; }
+    .home-panel p { color:#52615d !important; margin:0; font-size:.9rem; }
+    .home-feature-button button { min-height:126px !important; width:100% !important; text-align:left !important; padding:1.15rem !important; background:#e3ebe6 !important; border:1px solid rgba(31,35,35,.08) !important; border-radius:12px !important; color:#173b3b !important; white-space:normal !important; }
+    .home-feature-button button:hover { background:#d5e5dc !important; border-color:#78aa94 !important; }
+    .home-feature-button button p { white-space:normal !important; }
+    .home-stat { border-top:2px solid #8ebbaa; padding-top:.75rem; }
+    .home-stat strong { display:block; font-size:1.45rem; color:#173b3b; }
+    .home-stat span { color:#62716c; font-size:.8rem; }
     .card { background: rgba(209, 220, 214, 0.7) !important; border: 1px solid rgba(31,35,35,0.08) !important; }
     .card h3, .card p, .card b, .card span { color: #171b1d !important; }
     div[data-testid="stFormSubmitButton"] button {
@@ -408,7 +537,52 @@ for key, default in {"chat_history": [], "extracted_entities": {}, "recommendati
 language, budget_filter, duration_filter, style_filter, interests_filter, origin_filter, travelers_filter, trip_type_filter = sidebar_controls()
 st.markdown("<div class='brand'><span class='brand-mark'>✈️</span><span class='brand-title'>AI Travel Agent</span></div><div class='subtitle'>Your intelligent multilingual travel planning assistant</div>", unsafe_allow_html=True)
 
-tab_assistant, tab_weather, tab_landmark, tab_status = st.tabs(["🗺️ AI Trip Planner", "🌤️ Live Weather", "📷 Landmark Recognition", "💻 System Status"])
+tab_home, tab_assistant, tab_travel_os, tab_weather, tab_landmark, tab_status = st.tabs(["⌂ Home", "🗺️ AI Trip Planner", "🧭 Travel OS", "🌤️ Live Weather", "📷 Landmark Recognition", "💻 System Status"])
+
+with tab_home:
+    st.markdown("""
+    <section class="home-hero">
+      <div>
+        <div class="home-eyebrow">AI Travel Agent · intelligent journeys</div>
+        <h1>Go further.<br>Travel smarter.</h1>
+        <p>Plan meaningful trips with one calm workspace for destinations, budgets, stays, routes, local insight and every detail in between.</p>
+      </div>
+    </section>
+    """, unsafe_allow_html=True)
+    home_destination = st.text_input("Where are you going?", value=st.session_state.extracted_entities.get("destination") or "Hunza", key="home_destination", placeholder="Search a destination")
+    home_cols = st.columns([1.2, 1, 1, 1])
+    with home_cols[0]:
+        if st.button("Start planning", type="primary", use_container_width=True, key="home_start"):
+            st.session_state.extracted_entities = {"destination": home_destination, "budget": budget_filter, "duration": duration_filter, "travelers": travelers_filter, "origin": origin_filter, "trip_type": trip_type_filter, "interests": interests_filter, "travel_style": style_filter.lower(), "missing": []}
+            st.toast("Trip workspace ready")
+    with home_cols[1]:
+        st.markdown("<div class='home-stat'><strong>36</strong><span>Travel capabilities</span></div>", unsafe_allow_html=True)
+    with home_cols[2]:
+        st.markdown(f"<div class='home-stat'><strong>{len(destinations)}</strong><span>Curated destinations</span></div>", unsafe_allow_html=True)
+    with home_cols[3]:
+        st.markdown(f"<div class='home-stat'><strong>{len(favorite_rows())}</strong><span>Saved trips</span></div>", unsafe_allow_html=True)
+    st.markdown("### Everything for the journey")
+    feature_columns = st.columns(4)
+    feature_cards = [("01 · Discover", "Find destinations, attractions, food and local guidance.", "Discover"), ("02 · Plan", "Build weather-aware days, routes, hotels and packing lists.", "Plan"), ("03 · Manage", "Track spending, documents, reminders and trip progress.", "My Trip"), ("04 · Explore", "Translate signs, recognize landmarks and stay safety-aware.", "Language")]
+    for column, (title, description, target) in zip(feature_columns, feature_cards):
+        with column:
+            st.markdown("<div class='home-feature-button'>", unsafe_allow_html=True)
+            if st.button(f"{title}\n\n{description}", key=f"home_feature_{title}", use_container_width=True):
+                st.session_state.home_feature = title
+                st.session_state.os_tools = target
+            st.markdown("</div>", unsafe_allow_html=True)
+    selected_feature = st.session_state.get("home_feature")
+    if selected_feature:
+        feature_destination = st.session_state.get("home_destination", "Hunza")
+        feature_target = next(item[2] for item in feature_cards if item[0] == selected_feature)
+        st.success(f"{selected_feature} selected for {feature_destination}. Open Travel OS and choose {feature_target} to continue.")
+    st.markdown("### Built around your trip")
+    home_left, home_right = st.columns([1.1, 1])
+    with home_left:
+        st.markdown("**A practical travel companion, from the first idea to the last day.**")
+        st.caption("Use the AI Trip Planner for a complete itinerary, or open Travel OS for focused tools while you prepare and travel.")
+    with home_right:
+        st.info("Tip: choose your budget, duration and interests in the sidebar before starting a plan.")
 
 with tab_assistant:
     st.markdown("<div class='assistant-hero'><h1>Tell Ayla what you have in mind</h1></div>", unsafe_allow_html=True)
@@ -555,6 +729,206 @@ with tab_assistant:
                 planner_trips = favorite_rows()
                 st.metric("Saved trips", len(planner_trips))
                 st.metric("Planned budget", f"PKR {sum(float(trip['total_budget']) for trip in planner_trips):,.0f}")
+
+with tab_travel_os:
+    st.subheader("🧭 Travel OS")
+    st.caption("One workspace for planning, discovery, safety, documents and on-trip control.")
+    os_entities = st.session_state.extracted_entities
+    os_destination = st.text_input("Trip destination", value=os_entities.get("destination") or "Lahore", key="os_destination")
+    os_tools = st.radio("Open workspace", ["Discover", "Money", "Plan", "Language", "Safety", "My Trip"], horizontal=True, key="os_tools")
+
+    if os_tools == "Discover":
+        st.markdown("### Smart map and discovery")
+        map_locations = [{"name": name, "lat": coords[0], "lon": coords[1]} for name, coords in DESTINATION_COORDINATES.items()]
+        map_col, guide_col = st.columns([1.15, 1])
+        with map_col:
+            selected_map = st.selectbox("Map destination", list(DESTINATION_COORDINATES), index=list(DESTINATION_COORDINATES).index(os_destination) if os_destination in DESTINATION_COORDINATES else 0, key="os_map_destination")
+            lat, lon = DESTINATION_COORDINATES[selected_map]
+            st.map([{"lat": lat, "lon": lon}], latitude="lat", longitude="lon", size=80, color="#0e7490", zoom=6)
+            st.caption(f"Selected location: {selected_map} · Latitude {lat}, Longitude {lon}")
+        with guide_col:
+            st.markdown(f"### AI local guide: {selected_map}")
+            st.markdown(travel_guide(selected_map, {**os_entities, "destination": selected_map}))
+            st.markdown("#### Attractions and activities")
+            for place in nearby_place_details(selected_map):
+                place_col, save_col = st.columns([4, 1])
+                place_col.write(f"**{place['name']}** · {place['visit']}")
+                if save_col.button("Save", key=f"os_save_{selected_map}_{place['name']}"):
+                    save_place(selected_map, place["name"], "attraction", place["description"])
+                    st.success("Saved")
+        st.markdown("#### Destination discovery")
+        discovery = recommend_destinations({**os_entities, "destination": os_destination}, destinations, limit=4)
+        st.dataframe([{"Destination": item["name"], "Match": f"{item['score']:.0%}", "Estimated PKR": item["estimated_cost"], "Why": item["description"]} for item in discovery], use_container_width=True, hide_index=True)
+
+    elif os_tools == "Money":
+        st.markdown("### Live currency and spending control")
+        money_left, money_right = st.columns(2)
+        with money_left:
+            amount = st.number_input("Amount", min_value=0.0, value=10000.0, step=500.0, key="os_amount")
+            source = st.selectbox("From", ["PKR", "USD", "EUR", "GBP", "AED", "TRY"], key="os_source")
+            target = st.selectbox("To", ["PKR", "USD", "EUR", "GBP", "AED", "TRY"], index=1, key="os_target")
+            st.metric("Converted amount", f"{convert_currency(amount, source, target):,.2f} {target}")
+            st.caption("Indicative in-app rates. Confirm the live rate with your bank or exchange counter.")
+        with money_right:
+            st.markdown("#### Add expense")
+            with st.form("os_expense_form"):
+                expense_category = st.selectbox("Category", ["Stay", "Transport", "Food", "Activities", "Shopping", "Emergency"])
+                expense_description = st.text_input("Description")
+                expense_amount = st.number_input("Amount (PKR)", min_value=0.0, step=100.0)
+                expense_paid_by = st.text_input("Paid by", value="Me")
+                if st.form_submit_button("Add expense", type="primary") and expense_amount > 0:
+                    add_expense(os_destination, expense_category, expense_description, expense_amount, expense_paid_by)
+                    st.success("Expense added")
+        expenses = expense_rows(os_destination)
+        total_spent = sum(float(row["amount"]) for row in expenses)
+        planned = int(os_entities.get("budget") or budget_filter)
+        budget_col, spent_col, remain_col = st.columns(3)
+        budget_col.metric("Planned budget", f"PKR {planned:,}")
+        spent_col.metric("Spent", f"PKR {total_spent:,.0f}")
+        remain_col.metric("Remaining", f"PKR {planned - total_spent:,.0f}")
+        if expenses:
+            st.dataframe([{"Category": row["category"], "Description": row["description"], "PKR": row["amount"], "Paid by": row["paid_by"]} for row in expenses], use_container_width=True, hide_index=True)
+        st.markdown("#### Group expense splitter")
+        group_total = st.number_input("Group expense total (PKR)", min_value=0.0, value=float(total_spent), step=500.0, key="group_total")
+        group_size = st.number_input("People sharing", min_value=1, max_value=30, value=2, key="group_size")
+        st.info(f"Equal share: PKR {group_total / group_size:,.0f} per person")
+
+    elif os_tools == "Plan":
+        st.markdown("### AI smart packing and weather-aware daily planner")
+        plan_left, plan_right = st.columns(2)
+        with plan_left:
+            weather = get_weather(os_destination)
+            st.metric("Current weather", weather)
+            st.markdown("#### Adaptive packing list")
+            packing = packing_list({**os_entities, "destination": os_destination})
+            for item in packing:
+                st.checkbox(item, value=False, key=f"os_pack_{os_destination}_{item}")
+        with plan_right:
+            st.markdown("#### Daily travel planner")
+            plan_days = st.number_input("Days to schedule", 1, 30, int(os_entities.get("duration") or duration_filter), key="os_plan_days")
+            for day in range(1, int(plan_days) + 1):
+                places = nearby_place_details(os_destination)
+                place = places[(day - 1) % len(places)]
+                st.markdown(f"**Day {day} · {place['name']}**  \nMorning route, weather buffer, local meal and safe return route.")
+        st.markdown("#### Route and transport planner")
+        route_origin = st.selectbox("Route origin", ["Current location"] + list(DESTINATION_COORDINATES), key="os_route_origin")
+        route_budget = int(os_entities.get("budget") or budget_filter)
+        route_destination = os_destination if os_destination in DESTINATION_COORDINATES else list(DESTINATION_COORDINATES)[0]
+        route_options = transport_options(route_origin, route_destination, 1, "One-way", route_budget)
+        st.dataframe([{"Mode": item["mode"], "Distance km": item["distance_km"], "Hours": round(item["hours"], 1), "Estimated PKR": item["cost"]} for item in route_options], use_container_width=True, hide_index=True)
+
+    elif os_tools == "Language":
+        st.markdown("### AI travel translator")
+        language_target = st.selectbox("Local language", ["Urdu", "Arabic", "Turkish", "English"], key="os_language_target")
+        phrase_cols = st.columns(2)
+        for index, (english, local) in enumerate(local_phrases(language_target)):
+            phrase_cols[index % 2].markdown(f"**{english}**  \n{local}")
+        st.markdown("#### Conversation translator")
+        translate_text = st.text_area("Text to translate", placeholder="Type a phrase for a hotel, taxi or restaurant...", key="os_translate_text")
+        if st.button("Translate phrase", type="primary", key="os_translate"):
+            translated_phrase, translation_note = translate_phrase(translate_text, language_target)
+            result_language = "English" if is_roman_urdu(translate_text) else language_target
+            if translated_phrase:
+                st.success(f"{result_language} translation: {translated_phrase}")
+            else:
+                st.warning(translation_note)
+            if translated_phrase:
+                st.caption(translation_note)
+        st.markdown("#### Visual / sign and menu translator")
+        sign_image = st.file_uploader("Upload a sign or menu photo", type=["jpg", "jpeg", "png"], key="os_sign_image")
+        if sign_image:
+            from PIL import Image
+            uploaded_image = Image.open(sign_image)
+            preview_col, info_col = st.columns([1.15, 1])
+            with preview_col:
+                st.image(uploaded_image, caption=f"Selected image: {sign_image.name}", use_container_width=True)
+            with info_col:
+                st.markdown("**Selected image**")
+                st.caption(f"{sign_image.name} · {uploaded_image.width} × {uploaded_image.height}px")
+                st.caption("This is the image that will be analyzed when you click Read image.")
+        if sign_image and st.button("Read image", key="os_read_sign"):
+            image_bytes = sign_image.getvalue()
+            st.session_state.os_image_details = describe_image(image_bytes, get_secret("OPENAI_API_KEY"), get_secret("OPENAI_MODEL"))
+            st.session_state.os_image_category = recognize_landmark(image_bytes, get_secret("OPENAI_API_KEY"), get_secret("OPENAI_MODEL"))
+        image_details = st.session_state.get("os_image_details")
+        if image_details:
+            if "summary" in image_details:
+                st.success(image_details["summary"])
+                detail_rows = [
+                    ("Objects visible", image_details["objects"]),
+                    ("Food / items", image_details["food_or_items"]),
+                    ("Setting", image_details["setting"]),
+                    ("Readable text", image_details["visible_text"]),
+                    ("Travel context", image_details["travel_context"]),
+                ]
+                for label, value in detail_rows:
+                    st.markdown(f"**{label}:** {value}")
+            else:
+                st.warning(image_details.get("description", "Detailed image information is unavailable."))
+                st.caption(image_details.get("message", ""))
+
+    elif os_tools == "Safety":
+        st.markdown(f"### Tourist safety center · {os_destination}")
+        safety_cols = st.columns(2)
+        with safety_cols[0]:
+            st.markdown("#### Scam and safety advisor")
+            for advice in safety_brief(os_destination):
+                st.markdown(f"- {advice}")
+        with safety_cols[1]:
+            st.markdown("#### Emergency assistance")
+            st.error("Emergency: call your local police, ambulance or rescue service immediately. This app cannot dispatch emergency services.")
+            st.dataframe([{"Service": "Pakistan Police", "Number": "15"}, {"Service": "Rescue / Ambulance", "Number": "1122"}, {"Service": "Tourist contact", "Number": "Verify with destination authority"}], use_container_width=True, hide_index=True)
+            st.markdown("#### Emergency contact directory")
+            st.text_input("Trusted contact name", key="os_trusted_name")
+            st.text_input("Trusted contact phone", key="os_trusted_phone")
+
+    else:
+        st.markdown("### My trip control center")
+        trip_col, doc_col = st.columns(2)
+        with trip_col:
+            st.markdown("#### Trip progress and checklist")
+            items = packing_list({**os_entities, "destination": os_destination}) + ["Confirm hotel", "Download offline guide", "Share emergency plan"]
+            for item in items:
+                save_checklist_item(os_destination, item)
+            rows = checklist_rows(os_destination)
+            completed = 0
+            for row in rows:
+                checked = st.checkbox(row["item"], value=bool(row["completed"]), key=f"os_check_{row['id']}")
+                if checked:
+                    completed += 1
+                if checked != bool(row["completed"]):
+                    set_checklist_item(row["id"], checked)
+            st.progress(completed / max(len(rows), 1), text=f"Trip progress: {completed}/{len(rows)} tasks")
+            st.markdown("#### Activity reminder")
+            with st.form("os_reminder_form"):
+                reminder_title = st.text_input("Reminder", value="Check tomorrow's route")
+                reminder_date = st.date_input("Date")
+                reminder_time = st.time_input("Time")
+                if st.form_submit_button("Add reminder"):
+                    add_reminder(os_destination, reminder_title, reminder_date.isoformat(), reminder_time.strftime("%H:%M"))
+                    st.success("Reminder saved")
+            for row in reminder_rows(os_destination):
+                st.caption(f"{row['reminder_date']} {row['reminder_time']} · {row['title']}")
+        with doc_col:
+            st.markdown("#### Travel document organizer")
+            with st.form("os_document_form"):
+                document_name = st.text_input("Document name", placeholder="Passport / visa / insurance")
+                document_type = st.selectbox("Type", ["Passport", "Visa", "Insurance", "Booking", "Other"])
+                expiry_date = st.date_input("Expiry or travel date")
+                document_notes = st.text_input("Notes")
+                if st.form_submit_button("Add document") and document_name.strip():
+                    add_document(os_destination, document_name.strip(), document_type, expiry_date.isoformat(), document_notes)
+                    st.success("Document record saved")
+            docs = document_rows(os_destination)
+            if docs:
+                st.dataframe([{"Document": row["document_name"], "Type": row["document_type"], "Date": row["expiry_date"], "Notes": row["notes"]} for row in docs], use_container_width=True, hide_index=True)
+            saved = saved_place_rows(os_destination)
+            st.markdown(f"#### Saved places ({len(saved)})")
+            for place in saved:
+                st.caption(f"{place['place_name']} · {place['place_type']}")
+        st.markdown("#### Offline travel guide")
+        offline_guide = travel_guide(os_destination, {**os_entities, "destination": os_destination})
+        st.download_button("Download offline guide", data=offline_guide, file_name=f"{os_destination.replace(' ', '_')}_offline_guide.md", mime="text/markdown", key="os_offline_guide")
 
 _REMOVED_LEGACY_TABS = """Legacy top-level Budget/Food/Packing and Hotels/Transport/Places tabs removed.
 Their functionality is available inside AI Trip Planner > Planner Tools.
@@ -838,7 +1212,8 @@ with tab_landmark:
         metadata_location = result.get("metadata_location")
         if metadata_location:
             st.info(f"GPS metadata found in the image: {metadata_location['latitude']}, {metadata_location['longitude']}")
-            st.markdown(f"[Open embedded location in Google Maps]({metadata_location['map_url']})")
+            st.map([{"lat": metadata_location["latitude"], "lon": metadata_location["longitude"]}], latitude="lat", longitude="lon", size=40, color="#0e7490", zoom=12)
+            st.caption("Location view is embedded inside the app; no external Google Maps navigation is required.")
         else:
             st.caption("No GPS metadata was found. The location above is based on visual evidence only.")
         report = (

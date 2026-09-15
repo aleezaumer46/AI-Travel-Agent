@@ -27,6 +27,11 @@ def initialize_database() -> None:
         CREATE TABLE IF NOT EXISTS Trips (id INTEGER PRIMARY KEY, user_id INTEGER, destination_id INTEGER, total_budget REAL, duration_days INTEGER, created_at TEXT, itinerary_markdown TEXT);
         CREATE TABLE IF NOT EXISTS Favorites (id INTEGER PRIMARY KEY, destination TEXT, total_budget REAL, duration_days INTEGER, itinerary_markdown TEXT, created_at TEXT);
         CREATE TABLE IF NOT EXISTS TransportBookings (id INTEGER PRIMARY KEY, mode TEXT, origin TEXT, destination TEXT, trip_type TEXT, travelers INTEGER, estimated_cost REAL, pickup_location TEXT, travel_date TEXT, pickup_time TEXT, contact_name TEXT, contact_phone TEXT, status TEXT, created_at TEXT);
+        CREATE TABLE IF NOT EXISTS Expenses (id INTEGER PRIMARY KEY, destination TEXT, category TEXT, description TEXT, amount REAL, paid_by TEXT, created_at TEXT);
+        CREATE TABLE IF NOT EXISTS SavedPlaces (id INTEGER PRIMARY KEY, destination TEXT, place_name TEXT, place_type TEXT, notes TEXT, created_at TEXT, UNIQUE(destination, place_name));
+        CREATE TABLE IF NOT EXISTS Checklists (id INTEGER PRIMARY KEY, destination TEXT, item TEXT, completed INTEGER DEFAULT 0, created_at TEXT, UNIQUE(destination, item));
+        CREATE TABLE IF NOT EXISTS TravelDocuments (id INTEGER PRIMARY KEY, destination TEXT, document_name TEXT, document_type TEXT, expiry_date TEXT, notes TEXT, created_at TEXT);
+        CREATE TABLE IF NOT EXISTS Reminders (id INTEGER PRIMARY KEY, destination TEXT, title TEXT, reminder_date TEXT, reminder_time TEXT, completed INTEGER DEFAULT 0, created_at TEXT);
         """)
         count = connection.execute("SELECT COUNT(*) FROM Destinations").fetchone()[0]
         if count == 0 and DATA_PATH.exists():
@@ -85,3 +90,84 @@ def transport_booking_rows() -> list[dict]:
     initialize_database()
     with get_connection() as connection:
         return [dict(row) for row in connection.execute("SELECT * FROM TransportBookings ORDER BY created_at DESC")]
+
+
+def add_expense(destination: str, category: str, description: str, amount: float, paid_by: str) -> None:
+    initialize_database()
+    with get_connection() as connection:
+        connection.execute("INSERT INTO Expenses(destination, category, description, amount, paid_by, created_at) VALUES (?, ?, ?, ?, ?, ?)", (destination, category, description, amount, paid_by, datetime.now(timezone.utc).isoformat()))
+
+
+def expense_rows(destination: str | None = None) -> list[dict]:
+    initialize_database()
+    with get_connection() as connection:
+        query = "SELECT * FROM Expenses"
+        params = ()
+        if destination:
+            query += " WHERE destination = ?"
+            params = (destination,)
+        return [dict(row) for row in connection.execute(query + " ORDER BY created_at DESC", params)]
+
+
+def save_place(destination: str, place_name: str, place_type: str, notes: str = "") -> None:
+    initialize_database()
+    with get_connection() as connection:
+        connection.execute("INSERT OR IGNORE INTO SavedPlaces(destination, place_name, place_type, notes, created_at) VALUES (?, ?, ?, ?, ?)", (destination, place_name, place_type, notes, datetime.now(timezone.utc).isoformat()))
+
+
+def saved_place_rows(destination: str | None = None) -> list[dict]:
+    initialize_database()
+    with get_connection() as connection:
+        query = "SELECT * FROM SavedPlaces"
+        params = ()
+        if destination:
+            query += " WHERE destination = ?"
+            params = (destination,)
+        return [dict(row) for row in connection.execute(query + " ORDER BY created_at DESC", params)]
+
+
+def save_checklist_item(destination: str, item: str, completed: bool = False) -> None:
+    initialize_database()
+    with get_connection() as connection:
+        connection.execute("INSERT OR IGNORE INTO Checklists(destination, item, completed, created_at) VALUES (?, ?, ?, ?)", (destination, item, int(completed), datetime.now(timezone.utc).isoformat()))
+
+
+def checklist_rows(destination: str) -> list[dict]:
+    initialize_database()
+    with get_connection() as connection:
+        return [dict(row) for row in connection.execute("SELECT * FROM Checklists WHERE destination = ? ORDER BY id", (destination,))]
+
+
+def set_checklist_item(item_id: int, completed: bool) -> None:
+    initialize_database()
+    with get_connection() as connection:
+        connection.execute("UPDATE Checklists SET completed = ? WHERE id = ?", (int(completed), item_id))
+
+
+def add_document(destination: str, document_name: str, document_type: str, expiry_date: str, notes: str = "") -> None:
+    initialize_database()
+    with get_connection() as connection:
+        connection.execute("INSERT INTO TravelDocuments(destination, document_name, document_type, expiry_date, notes, created_at) VALUES (?, ?, ?, ?, ?, ?)", (destination, document_name, document_type, expiry_date, notes, datetime.now(timezone.utc).isoformat()))
+
+
+def document_rows(destination: str) -> list[dict]:
+    initialize_database()
+    with get_connection() as connection:
+        return [dict(row) for row in connection.execute("SELECT * FROM TravelDocuments WHERE destination = ? ORDER BY expiry_date", (destination,))]
+
+
+def add_reminder(destination: str, title: str, reminder_date: str, reminder_time: str) -> None:
+    initialize_database()
+    with get_connection() as connection:
+        connection.execute("INSERT INTO Reminders(destination, title, reminder_date, reminder_time, created_at) VALUES (?, ?, ?, ?, ?)", (destination, title, reminder_date, reminder_time, datetime.now(timezone.utc).isoformat()))
+
+
+def reminder_rows(destination: str | None = None) -> list[dict]:
+    initialize_database()
+    with get_connection() as connection:
+        query = "SELECT * FROM Reminders"
+        params = ()
+        if destination:
+            query += " WHERE destination = ?"
+            params = (destination,)
+        return [dict(row) for row in connection.execute(query + " ORDER BY reminder_date, reminder_time", params)]
