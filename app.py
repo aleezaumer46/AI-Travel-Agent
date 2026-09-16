@@ -570,12 +570,64 @@ with tab_home:
             if st.button(f"{title}\n\n{description}", key=f"home_feature_{title}", use_container_width=True):
                 st.session_state.home_feature = title
                 st.session_state.os_tools = target
+                st.session_state.home_target = target
+                st.session_state.active_section = target
             st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("### Included travel tools")
+    tool_mapping = {
+        "AI Itinerary Planner": "AI Trip Planner",
+        "Interactive Budget Dashboard": "Money",
+        "Smart Packing Checklist": "Plan",
+        "Group Expense Splitter": "Money",
+        "Interactive Map View": "Discover",
+        "Weather Widget": "Live Weather",
+        "Multi-Page Navigation": "Travel OS",
+        "Report Export (Excel/PDF)": "Trip Dashboard",
+        "Currency Converter": "Money",
+        "SQLite Database Integration": "System Status",
+    }
+    tool_columns = st.columns(5)
+    for idx, (tool_name, handled_by) in enumerate(tool_mapping.items()):
+        with tool_columns[idx % 5]:
+            st.markdown("<div class='home-feature-button'>", unsafe_allow_html=True)
+            if st.button(f"{tool_name}", key=f"tool_{tool_name}", use_container_width=True):
+                st.session_state.home_feature = tool_name
+                st.session_state.home_target = handled_by
+                st.session_state.active_section = handled_by
+                if handled_by == "AI Trip Planner":
+                    st.session_state.home_feature = "AI Itinerary Planner"
+                    st.session_state.home_target = "AI Trip Planner"
+                elif handled_by == "Live Weather":
+                    st.session_state.home_feature = "Weather Widget"
+                    st.session_state.home_target = "Weather Widget"
+                elif handled_by == "Travel OS":
+                    st.session_state.home_feature = "Multi-Page Navigation"
+                    st.session_state.home_target = "Travel OS"
+                elif handled_by == "System Status":
+                    st.session_state.home_feature = "SQLite Database Integration"
+                    st.session_state.home_target = "System Status"
+                else:
+                    st.session_state.home_feature = tool_name
+                    st.session_state.home_target = tool_name
+            st.markdown("</div>", unsafe_allow_html=True)
+
     selected_feature = st.session_state.get("home_feature")
     if selected_feature:
         feature_destination = st.session_state.get("home_destination", "Hunza")
-        feature_target = next(item[2] for item in feature_cards if item[0] == selected_feature)
-        st.success(f"{selected_feature} selected for {feature_destination}. Open Travel OS and choose {feature_target} to continue.")
+        feature_target = st.session_state.get("home_target") or next((item[2] for item in feature_cards if item[0] == selected_feature), tool_mapping.get(selected_feature, "Discover"))
+        st.success(f"{selected_feature} opened for {feature_destination}. The app is now focused on the {feature_target} section.")
+
+        if feature_target in {"Discover", "Money", "Plan", "Language", "Safety", "My Trip"}:
+            st.session_state.os_tools = feature_target
+            st.info(f"Opening Travel OS → {feature_target}.")
+        elif feature_target == "AI Trip Planner":
+            st.info("Opening AI Trip Planner.")
+        elif feature_target == "Weather Widget":
+            st.info("Opening Live Weather.")
+        elif feature_target == "System Status":
+            st.info("Opening System Status.")
+
     st.markdown("### Built around your trip")
     home_left, home_right = st.columns([1.1, 1])
     with home_left:
