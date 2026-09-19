@@ -33,8 +33,8 @@ The application is organized into focused tabs:
 | Tool | Purpose |
 | --- | --- |
 | AI Trip Planner | Chat-based multilingual planning and itinerary generation |
-| Trip Tools | Budget planner, packing assistant, food guide, PDF export, and favorites |
-| Travel Hub | Compare destinations, hotel finder, transport, nearby places, travel guide, My Trips, and dashboard |
+| Trip Tools | Budget planner, packing assistant, food guide, and PDF export |
+| Travel Hub | Compare destinations, hotel finder, transport, nearby places, and travel guide |
 | Live Weather | Current weather for a selected destination |
 | Image Recognition | Landmark identification and general image description |
 | Travel OS | Map, discovery, money, packing, language, safety, documents, reminders, saved places, offline guide, and trip progress |
@@ -125,12 +125,12 @@ Never commit `.streamlit/secrets.toml`. It is excluded by `.gitignore`. If a key
 4. Confirm or type any destination.
 5. Review Smart Recommendations.
 6. Generate the grounded itinerary.
-7. Open Trip Tools for budget, packing, food, PDF, and favorites.
+7. Open Trip Tools for budget, packing, food, and PDF export.
 8. Use Travel Hub for comparisons, transport, nearby exploration, guides, and dashboard insights.
 
 ## Data and Privacy
 
-- Trip records and favorites are stored in local SQLite.
+- Trip records are stored in local SQLite.
 - API keys are loaded from Streamlit secrets and are never required in source code.
 - Uploaded images are processed during the current Streamlit session and are not intentionally stored by the application.
 - The local fallback model may download a CLIP checkpoint to the Hugging Face cache on first use.

@@ -1,8 +1,8 @@
 """AI Travel Agent - tabbed Streamlit experience."""
 import hashlib
-import io
 import textwrap
 import csv
+import re
 from math import asin, cos, radians, sin, sqrt
 import requests
 import streamlit as st
@@ -16,13 +16,28 @@ except ModuleNotFoundError:  # pragma: no cover
 from modules import database
 
 destination_rows = database.destination_rows
-favorite_rows = database.favorite_rows
 initialize_database = database.initialize_database
 log_trip = database.log_trip
-save_favorite = database.save_favorite
 add_expense = database.add_expense
 expense_rows = database.expense_rows
+delete_expense = getattr(database, "delete_expense", None)
+if delete_expense is None:
+    def delete_expense(expense_id: int) -> None:
+        return None
 save_place = database.save_place
+delete_saved_place = getattr(database, "delete_saved_place", None)
+if delete_saved_place is None:
+    def delete_saved_place(destination: str, place_name: str) -> None:
+        """Graceful fallback for older database builds without a delete helper."""
+        return None
+delete_document = getattr(database, "delete_document", None)
+if delete_document is None:
+    def delete_document(destination: str, document_name: str) -> None:
+        return None
+delete_reminder = getattr(database, "delete_reminder", None)
+if delete_reminder is None:
+    def delete_reminder(destination: str, title: str) -> None:
+        return None
 saved_place_rows = database.saved_place_rows
 save_checklist_item = database.save_checklist_item
 checklist_rows = database.checklist_rows
@@ -141,12 +156,12 @@ def convert_currency(amount: float, source: str, target: str) -> float:
 
 
 def local_phrases(language: str) -> list[tuple[str, str]]:
-    phrase_sets = {"Urdu": [("Hello", "Assalam-o-alaikum"), ("How much?", "Yeh kitne ka hai?"), ("Help", "Madad kijiye"), ("Where is the hotel?", "Hotel kahan hai?")], "Arabic": [("Hello", "Marhaba"), ("How much?", "Kam al-sear?"), ("Help", "Musaada"), ("Where is the hotel?", "Ayna al-funduq?")], "Turkish": [("Hello", "Merhaba"), ("How much?", "Ne kadar?"), ("Help", "Yardim edin"), ("Where is the hotel?", "Otel nerede?")]}
+    phrase_sets = {"Urdu": [("Hello", "Assalam-o-alaikum"), ("How much?", "Yeh kitne ka hai?"), ("Help", "Madad kijiye"), ("Where is the hotel?", "Hotel kahan hai?")], "Roman Urdu": [("Hello", "Assalam-o-alaikum"), ("How much?", "Yeh kitne ka hai?"), ("Help", "Meri madad kijiye"), ("Where is the hotel?", "Hotel kahan hai?")], "Arabic": [("Hello", "Marhaba"), ("How much?", "Kam al-sear?"), ("Help", "Musaada"), ("Where is the hotel?", "Ayna al-funduq?")], "Turkish": [("Hello", "Merhaba"), ("How much?", "Ne kadar?"), ("Help", "Yardim edin"), ("Where is the hotel?", "Otel nerede?")]}
     return phrase_sets.get(language, [("Hello", "Hello"), ("How much?", "How much?"), ("Help", "Please help"), ("Where is the hotel?", "Where is the hotel?")])
 
 
 def is_roman_urdu(text: str) -> bool:
-    roman_words = {"ma", "mein", "ka", "ki", "ke", "kahan", "kon", "sa", "hai", "ha", "mujhy", "mujhe", "chahiye", "kitna", "kitne", "acha", "qareeb", "sab", "se", "batao", "karo", "karna"}
+    roman_words = {"ma", "mein", "ka", "ki", "ke", "kaha", "kahan", "kon", "sa", "hai", "ha", "mujhy", "mujhe", "chahiye", "kitna", "kitne", "acha", "qareeb", "sab", "se", "batao", "karo", "karna"}
     words = set(re.findall(r"[a-z]+", text.casefold()))
     return len(words & roman_words) >= 2
 
@@ -158,7 +173,7 @@ def translate_phrase(text: str, target_language: str) -> tuple[str, str]:
         return "", "Enter a phrase to translate."
     roman_input = is_roman_urdu(phrase)
     requested_language = target_language
-    if roman_input:
+    if roman_input and requested_language != "Roman Urdu":
         target_language = "English"
     if target_language == "English" and not roman_input:
         return phrase, "English is already the selected language."
@@ -187,6 +202,7 @@ def translate_phrase(text: str, target_language: str) -> tuple[str, str]:
             "how much does this taxi cost": "How much does this taxi cost?",
             "mujhe aik kamra chahiye": "I need a room.",
             "hotel kahan hai": "Where is the hotel?",
+            "hotel kaha ha": "Where is the hotel?",
         },
         "Urdu": {
             "how much does this taxi cost?": "Yeh taxi kitne ki hai?",
@@ -194,6 +210,15 @@ def translate_phrase(text: str, target_language: str) -> tuple[str, str]:
             "where is the hotel?": "Hotel kahan hai?",
             "please help me": "Barah-e-karam meri madad karein.",
             "i need a room": "Mujhe aik kamra chahiye.",
+            "where is the bathroom?": "Bathroom kahan hai?",
+        },
+        "Roman Urdu": {
+            "hello": "Assalam-o-alaikum",
+            "how much does this taxi cost?": "Yeh taxi kitne ki hai?",
+            "how much?": "Yeh kitne ka hai?",
+            "where is the hotel?": "Hotel kahan hai?",
+            "please help me": "Meri madad kijiye",
+            "i need a room": "Mujhe aik kamra chahiye",
             "where is the bathroom?": "Bathroom kahan hai?",
         },
         "Arabic": {
@@ -215,6 +240,55 @@ def translate_phrase(text: str, target_language: str) -> tuple[str, str]:
     if roman_input and requested_language != "English":
         return phrase, "Roman Urdu detected. Add an OpenAI API key for free-form Roman Urdu to English translation."
     return phrase, f"No offline match found. Add an OpenAI API key for free-form {target_language} translation."
+
+
+def translate_and_explain(text: str, target_language: str) -> tuple[str, str, str, str]:
+    """Translate a phrase or answer a travel question with useful context."""
+    phrase = text.strip()
+    if not phrase:
+        return "", "", "Enter a phrase or travel question.", ""
+
+    requested_language = target_language
+    if is_roman_urdu(phrase) and target_language != "Roman Urdu":
+        target_language = "English"
+    key = get_secret("OPENAI_API_KEY")
+    if key:
+        try:
+            from openai import OpenAI
+            response = OpenAI(api_key=key).chat.completions.create(
+                model=get_secret("OPENAI_MODEL") or "gpt-4o-mini",
+                temperature=0.2,
+                max_tokens=300,
+                messages=[
+                    {"role": "system", "content": f"You are a practical travel translator and Q&A assistant. Understand any phrase or travel question. Return exactly four lines starting with TRANSLATION:, ANSWER:, TRAVEL TIP:, and NOTE:. Translate and explain in {target_language}. Keep the answer concise and never invent live prices, schedules, laws, or safety facts."},
+                    {"role": "user", "content": phrase},
+                ],
+            )
+            raw_response = (response.choices[0].message.content or "").strip()
+            fields = {}
+            for line in raw_response.splitlines():
+                if ":" in line:
+                    label, value = line.split(":", 1)
+                    fields[label.strip().upper()] = value.strip()
+            translation = fields.get("TRANSLATION")
+            answer = fields.get("ANSWER")
+            tip = fields.get("TRAVEL TIP")
+            note = fields.get("NOTE", "Generated with the configured AI translation service.")
+            if translation and answer:
+                return translation, answer, note, tip or "Confirm important details locally before acting."
+        except Exception:
+            pass
+
+    translation, note = translate_phrase(phrase, requested_language)
+    if not translation:
+        return "", "", note, ""
+    if is_roman_urdu(phrase):
+        answer = "This is a Roman Urdu travel question. The translated meaning is shown above."
+    elif phrase.casefold().startswith(("what is ", "what are ", "where is ", "how do ", "how can ", "can i ")):
+        answer = "This question needs the configured AI service for a detailed destination-specific answer."
+    else:
+        answer = "The phrase has been translated. Add a question such as 'Where is the hotel?' for a detailed travel answer."
+    return translation, answer, note, "Confirm important details such as prices, timings and local rules before acting."
 
 
 def safety_brief(destination: str) -> list[str]:
@@ -540,99 +614,127 @@ st.markdown("<div class='brand'><span class='brand-mark'>✈️</span><span clas
 tab_home, tab_assistant, tab_travel_os, tab_weather, tab_landmark, tab_status = st.tabs(["⌂ Home", "🗺️ AI Trip Planner", "🧭 Travel OS", "🌤️ Live Weather", "📷 Landmark Recognition", "💻 System Status"])
 
 with tab_home:
-    st.markdown("""
-    <section class="home-hero">
-      <div>
-        <div class="home-eyebrow">AI Travel Agent · intelligent journeys</div>
-        <h1>Go further.<br>Travel smarter.</h1>
-        <p>Plan meaningful trips with one calm workspace for destinations, budgets, stays, routes, local insight and every detail in between.</p>
-      </div>
-    </section>
-    """, unsafe_allow_html=True)
-    home_destination = st.text_input("Where are you going?", value=st.session_state.extracted_entities.get("destination") or "Hunza", key="home_destination", placeholder="Search a destination")
-    home_cols = st.columns([1.2, 1, 1, 1])
-    with home_cols[0]:
-        if st.button("Start planning", type="primary", use_container_width=True, key="home_start"):
-            st.session_state.extracted_entities = {"destination": home_destination, "budget": budget_filter, "duration": duration_filter, "travelers": travelers_filter, "origin": origin_filter, "trip_type": trip_type_filter, "interests": interests_filter, "travel_style": style_filter.lower(), "missing": []}
-            st.toast("Trip workspace ready")
-    with home_cols[1]:
-        st.markdown("<div class='home-stat'><strong>36</strong><span>Travel capabilities</span></div>", unsafe_allow_html=True)
-    with home_cols[2]:
-        st.markdown(f"<div class='home-stat'><strong>{len(destinations)}</strong><span>Curated destinations</span></div>", unsafe_allow_html=True)
-    with home_cols[3]:
-        st.markdown(f"<div class='home-stat'><strong>{len(favorite_rows())}</strong><span>Saved trips</span></div>", unsafe_allow_html=True)
-    st.markdown("### Everything for the journey")
-    feature_columns = st.columns(4)
-    feature_cards = [("01 · Discover", "Find destinations, attractions, food and local guidance.", "Discover"), ("02 · Plan", "Build weather-aware days, routes, hotels and packing lists.", "Plan"), ("03 · Manage", "Track spending, documents, reminders and trip progress.", "My Trip"), ("04 · Explore", "Translate signs, recognize landmarks and stay safety-aware.", "Language")]
-    for column, (title, description, target) in zip(feature_columns, feature_cards):
-        with column:
+    st.markdown(
+        """
+        <div class="home-hero">
+          <div>
+            <div class="home-eyebrow">AI travel platform · premium trip planning</div>
+            <h1>Plan smarter trips<br>with less stress.</h1>
+            <p>From inspiration to itinerary, this workspace helps you compare destinations, manage spending, monitor weather, translate on the go, and keep every trip organized in one place.</p>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    home_inner_left, home_inner_right = st.columns([1.4, 0.8])
+    with home_inner_left:
+        home_destination = st.text_input(
+            "Where are you going?",
+            value=st.session_state.extracted_entities.get("destination") or "Hunza",
+            key="home_destination",
+            placeholder="Search a destination",
+        )
+        start_row = st.columns([1.1, 2])
+        with start_row[0]:
+            if st.button("Start planning", type="primary", use_container_width=True, key="home_start"):
+                st.session_state.extracted_entities = {
+                    "destination": home_destination,
+                    "budget": budget_filter,
+                    "duration": duration_filter,
+                    "travelers": travelers_filter,
+                    "origin": origin_filter,
+                    "trip_type": trip_type_filter,
+                    "interests": interests_filter,
+                    "travel_style": style_filter.lower(),
+                    "missing": [],
+                }
+                st.toast("Trip workspace ready")
+        with start_row[1]:
+            st.caption("Smart pre-trip setup based on your selected trip preferences.")
+
+    st.markdown("### Core travel tools")
+    feature_cards = [
+        ("AI Itinerary Planner", "Generate smart trip plans and day-by-day routes.", "AI Trip Planner"),
+        ("Interactive Budget Dashboard", "Track costs, budgets, and planning decisions.", "Money"),
+        ("Smart Packing Checklist", "Prepare weather-aware essentials before departure.", "Plan"),
+        ("Group Expense Splitter", "Share costs fairly with your travel group.", "Money"),
+        ("Interactive Map View", "Explore destinations and nearby places in-app.", "Discover"),
+        ("Weather Widget", "Check local weather conditions before each leg.", "Live Weather"),
+        ("Multi-Page Navigation", "Switch between planning, travel OS and trip management.", "Travel OS"),
+        ("Currency Converter", "Convert PKR and other currencies instantly.", "Money"),
+        ("SQLite Database Integration", "Store trip data, documents and records locally.", "System Status"),
+    ]
+
+    tool_columns = st.columns(5)
+    for idx, (title, description, target) in enumerate(feature_cards):
+        with tool_columns[idx % 5]:
             st.markdown("<div class='home-feature-button'>", unsafe_allow_html=True)
             if st.button(f"{title}\n\n{description}", key=f"home_feature_{title}", use_container_width=True):
                 st.session_state.home_feature = title
-                st.session_state.os_tools = target
                 st.session_state.home_target = target
                 st.session_state.active_section = target
-            st.markdown("</div>", unsafe_allow_html=True)
-
-    st.markdown("### Included travel tools")
-    tool_mapping = {
-        "AI Itinerary Planner": "AI Trip Planner",
-        "Interactive Budget Dashboard": "Money",
-        "Smart Packing Checklist": "Plan",
-        "Group Expense Splitter": "Money",
-        "Interactive Map View": "Discover",
-        "Weather Widget": "Live Weather",
-        "Multi-Page Navigation": "Travel OS",
-        "Report Export (Excel/PDF)": "Trip Dashboard",
-        "Currency Converter": "Money",
-        "SQLite Database Integration": "System Status",
-    }
-    tool_columns = st.columns(5)
-    for idx, (tool_name, handled_by) in enumerate(tool_mapping.items()):
-        with tool_columns[idx % 5]:
-            st.markdown("<div class='home-feature-button'>", unsafe_allow_html=True)
-            if st.button(f"{tool_name}", key=f"tool_{tool_name}", use_container_width=True):
-                st.session_state.home_feature = tool_name
-                st.session_state.home_target = handled_by
-                st.session_state.active_section = handled_by
-                if handled_by == "AI Trip Planner":
-                    st.session_state.home_feature = "AI Itinerary Planner"
-                    st.session_state.home_target = "AI Trip Planner"
-                elif handled_by == "Live Weather":
-                    st.session_state.home_feature = "Weather Widget"
-                    st.session_state.home_target = "Weather Widget"
-                elif handled_by == "Travel OS":
-                    st.session_state.home_feature = "Multi-Page Navigation"
-                    st.session_state.home_target = "Travel OS"
-                elif handled_by == "System Status":
-                    st.session_state.home_feature = "SQLite Database Integration"
-                    st.session_state.home_target = "System Status"
-                else:
-                    st.session_state.home_feature = tool_name
-                    st.session_state.home_target = tool_name
+                if target in {"Discover", "Money", "Plan", "Language", "Safety", "My Trip"}:
+                    st.session_state.os_tools = target
+                elif target == "AI Trip Planner":
+                    st.session_state.chat_history = st.session_state.get("chat_history", [])
+                elif target == "Live Weather":
+                    st.session_state.weather_result = get_weather(st.session_state.extracted_entities.get("destination") or "Lahore")
             st.markdown("</div>", unsafe_allow_html=True)
 
     selected_feature = st.session_state.get("home_feature")
     if selected_feature:
         feature_destination = st.session_state.get("home_destination", "Hunza")
-        feature_target = st.session_state.get("home_target") or next((item[2] for item in feature_cards if item[0] == selected_feature), tool_mapping.get(selected_feature, "Discover"))
-        st.success(f"{selected_feature} opened for {feature_destination}. The app is now focused on the {feature_target} section.")
-
+        feature_target = st.session_state.get("home_target") or "Discover"
+        st.success(f"{selected_feature} is ready for {feature_destination}. The app is focused on {feature_target}.")
         if feature_target in {"Discover", "Money", "Plan", "Language", "Safety", "My Trip"}:
             st.session_state.os_tools = feature_target
             st.info(f"Opening Travel OS → {feature_target}.")
         elif feature_target == "AI Trip Planner":
             st.info("Opening AI Trip Planner.")
-        elif feature_target == "Weather Widget":
+        elif feature_target == "Live Weather":
             st.info("Opening Live Weather.")
         elif feature_target == "System Status":
             st.info("Opening System Status.")
 
+    st.markdown("### Why this works for travelers")
+    value_cols = st.columns(3)
+    with value_cols[0]:
+        st.markdown(
+            """
+            <div class='home-panel'>
+              <h3>Travel with clarity</h3>
+              <p>Everything you need is gathered in one place, from route planning to spending and document tracking.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with value_cols[1]:
+        st.markdown(
+            """
+            <div class='home-panel'>
+              <h3>Built for decisions</h3>
+              <p>Compare destinations, adjust budget, check weather and plan local experiences without hunting across apps.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with value_cols[2]:
+        st.markdown(
+            """
+            <div class='home-panel'>
+              <h3>Travel-ready workflow</h3>
+              <p>Save essentials, export reports, and keep the entire trip organized from planning to arrival.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
     st.markdown("### Built around your trip")
     home_left, home_right = st.columns([1.1, 1])
     with home_left:
-        st.markdown("**A practical travel companion, from the first idea to the last day.**")
-        st.caption("Use the AI Trip Planner for a complete itinerary, or open Travel OS for focused tools while you prepare and travel.")
+        st.markdown("**A practical travel companion from the first idea to the last day.**")
+        st.caption("Use AI trip planning for the bigger picture, and Travel OS for day-to-day execution while you travel.")
     with home_right:
         st.info("Tip: choose your budget, duration and interests in the sidebar before starting a plan.")
 
@@ -740,7 +842,7 @@ with tab_assistant:
                 food_columns[index % 2].markdown(f"- {food}")
 
         with planner_tool_tabs[1]:
-            planner_hub_tool = st.radio("Choose planner tool", ["🏨 Hotels", "🚗 Transport", "📍 Nearby Places", "📄 Travel Guide", "📊 Trip Dashboard"], horizontal=True, key="planner_hub_tool")
+            planner_hub_tool = st.radio("Choose planner tool", ["🏨 Hotels", "🚗 Transport", "📍 Nearby Places", "📄 Travel Guide"], horizontal=True, key="planner_hub_tool")
             if planner_hub_tool == "🏨 Hotels":
                 planner_budget = int(planner_entities.get("budget", 0))
                 planner_duration = int(planner_entities.get("duration", 1))
@@ -774,14 +876,12 @@ with tab_assistant:
                     st.markdown(f"**{selected_place['description']}**")
                     st.markdown(f"📌 **Visit plan:** {selected_place['visit']}")
                     st.markdown(f"💡 **Travel tip:** {selected_place['tip']}")
+                    if st.button(f"💾 Save this place", key=f"save_selected_place_{planner_entities['destination']}_{selected_place['name']}", use_container_width=True):
+                        save_place(planner_entities["destination"], selected_place["name"], "attraction", selected_place["description"])
+                        st.success(f"{selected_place['name']} saved.")
                     st.caption("Confirm current access, timings, weather and local conditions before visiting.")
             elif planner_hub_tool == "📄 Travel Guide":
                 st.markdown(travel_guide(planner_entities["destination"], planner_entities))
-            elif planner_hub_tool == "📊 Trip Dashboard":
-                planner_trips = favorite_rows()
-                st.metric("Saved trips", len(planner_trips))
-                st.metric("Planned budget", f"PKR {sum(float(trip['total_budget']) for trip in planner_trips):,.0f}")
-
 with tab_travel_os:
     st.subheader("🧭 Travel OS")
     st.caption("One workspace for planning, discovery, safety, documents and on-trip control.")
@@ -791,13 +891,14 @@ with tab_travel_os:
 
     if os_tools == "Discover":
         st.markdown("### Smart map and discovery")
-        map_locations = [{"name": name, "lat": coords[0], "lon": coords[1]} for name, coords in DESTINATION_COORDINATES.items()]
         map_col, guide_col = st.columns([1.15, 1])
         with map_col:
             selected_map = st.selectbox("Map destination", list(DESTINATION_COORDINATES), index=list(DESTINATION_COORDINATES).index(os_destination) if os_destination in DESTINATION_COORDINATES else 0, key="os_map_destination")
             lat, lon = DESTINATION_COORDINATES[selected_map]
-            st.map([{"lat": lat, "lon": lon}], latitude="lat", longitude="lon", size=80, color="#0e7490", zoom=6)
-            st.caption(f"Selected location: {selected_map} · Latitude {lat}, Longitude {lon}")
+            selected_point = {"name": f"Selected: {selected_map}", "lat": lat, "lon": lon, "marker_color": "#dc2626", "marker_size": 180}
+            st.map([selected_point], latitude="lat", longitude="lon", size="marker_size", color="marker_color", zoom=10)
+            st.success(f"📍 {selected_map} is highlighted in red on the map.")
+            st.caption(f"Coordinates: {lat:.5f}, {lon:.5f} · Showing selected location only")
         with guide_col:
             st.markdown(f"### AI local guide: {selected_map}")
             st.markdown(travel_guide(selected_map, {**os_entities, "destination": selected_map}))
@@ -808,6 +909,17 @@ with tab_travel_os:
                 if save_col.button("Save", key=f"os_save_{selected_map}_{place['name']}"):
                     save_place(selected_map, place["name"], "attraction", place["description"])
                     st.success("Saved")
+            saved_places = saved_place_rows(selected_map)
+            if saved_places:
+                st.markdown("#### Saved places")
+                for place in saved_places:
+                    place_row = st.columns([4, 1])
+                    with place_row[0]:
+                        st.caption(f"• {place['place_name']}")
+                    with place_row[1]:
+                        if st.button("Unsave", key=f"unsave_{selected_map}_{place['place_name']}", use_container_width=True):
+                            delete_saved_place(selected_map, place["place_name"])
+                            st.rerun()
         st.markdown("#### Destination discovery")
         discovery = recommend_destinations({**os_entities, "destination": os_destination}, destinations, limit=4)
         st.dataframe([{"Destination": item["name"], "Match": f"{item['score']:.0%}", "Estimated PKR": item["estimated_cost"], "Why": item["description"]} for item in discovery], use_container_width=True, hide_index=True)
@@ -840,6 +952,15 @@ with tab_travel_os:
         remain_col.metric("Remaining", f"PKR {planned - total_spent:,.0f}")
         if expenses:
             st.dataframe([{"Category": row["category"], "Description": row["description"], "PKR": row["amount"], "Paid by": row["paid_by"]} for row in expenses], use_container_width=True, hide_index=True)
+            for row in expenses:
+                expense_left, expense_right = st.columns([5, 1])
+                with expense_left:
+                    description = row["description"] or row["category"]
+                    st.caption(f"{row['category']} · {description} · PKR {float(row['amount']):,.0f} · Paid by {row['paid_by']}")
+                with expense_right:
+                    if st.button("Delete", key=f"delete_expense_{row['id']}", use_container_width=True):
+                        delete_expense(row["id"])
+                        st.rerun()
         st.markdown("#### Group expense splitter")
         group_total = st.number_input("Group expense total (PKR)", min_value=0.0, value=float(total_spent), step=500.0, key="group_total")
         group_size = st.number_input("People sharing", min_value=1, max_value=30, value=2, key="group_size")
@@ -871,20 +992,23 @@ with tab_travel_os:
 
     elif os_tools == "Language":
         st.markdown("### AI travel translator")
-        language_target = st.selectbox("Local language", ["Urdu", "Arabic", "Turkish", "English"], key="os_language_target")
+        language_target = st.selectbox("Local language", ["Urdu", "Roman Urdu", "Arabic", "Turkish", "English"], key="os_language_target")
         phrase_cols = st.columns(2)
         for index, (english, local) in enumerate(local_phrases(language_target)):
             phrase_cols[index % 2].markdown(f"**{english}**  \n{local}")
         st.markdown("#### Conversation translator")
-        translate_text = st.text_area("Text to translate", placeholder="Type a phrase for a hotel, taxi or restaurant...", key="os_translate_text")
+        translate_text = st.text_area("Ask or translate anything", placeholder="Ask about a hotel, taxi, restaurant, route or local phrase...", key="os_translate_text")
         if st.button("Translate phrase", type="primary", key="os_translate"):
-            translated_phrase, translation_note = translate_phrase(translate_text, language_target)
-            result_language = "English" if is_roman_urdu(translate_text) else language_target
+            translated_phrase, travel_answer, translation_note, travel_tip = translate_and_explain(translate_text, language_target)
+            result_language = "English" if is_roman_urdu(translate_text) and language_target != "Roman Urdu" else language_target
             if translated_phrase:
                 st.success(f"{result_language} translation: {translated_phrase}")
+                st.markdown(f"**Answer / meaning:** {travel_answer}")
+                if travel_tip:
+                    st.info(f"**Travel tip:** {travel_tip}")
             else:
                 st.warning(translation_note)
-            if translated_phrase:
+            if translated_phrase and translation_note:
                 st.caption(translation_note)
         st.markdown("#### Visual / sign and menu translator")
         sign_image = st.file_uploader("Upload a sign or menu photo", type=["jpg", "jpeg", "png"], key="os_sign_image")
@@ -960,7 +1084,13 @@ with tab_travel_os:
                     add_reminder(os_destination, reminder_title, reminder_date.isoformat(), reminder_time.strftime("%H:%M"))
                     st.success("Reminder saved")
             for row in reminder_rows(os_destination):
-                st.caption(f"{row['reminder_date']} {row['reminder_time']} · {row['title']}")
+                rem_col, del_col = st.columns([5, 1])
+                with rem_col:
+                    st.caption(f"{row['reminder_date']} {row['reminder_time']} · {row['title']}")
+                with del_col:
+                    if st.button("Remove", key=f"remove_reminder_{row['id']}", use_container_width=True):
+                        delete_reminder(os_destination, row["title"])
+                        st.rerun()
         with doc_col:
             st.markdown("#### Travel document organizer")
             with st.form("os_document_form"):
@@ -974,10 +1104,24 @@ with tab_travel_os:
             docs = document_rows(os_destination)
             if docs:
                 st.dataframe([{"Document": row["document_name"], "Type": row["document_type"], "Date": row["expiry_date"], "Notes": row["notes"]} for row in docs], use_container_width=True, hide_index=True)
+                for row in docs:
+                    doc_col_left, doc_col_right = st.columns([5, 1])
+                    with doc_col_left:
+                        st.caption(f"• {row['document_name']} · {row['document_type']}")
+                    with doc_col_right:
+                        if st.button("Delete", key=f"delete_doc_{row['id']}", use_container_width=True):
+                            delete_document(os_destination, row["document_name"])
+                            st.rerun()
             saved = saved_place_rows(os_destination)
             st.markdown(f"#### Saved places ({len(saved)})")
             for place in saved:
-                st.caption(f"{place['place_name']} · {place['place_type']}")
+                save_col_left, save_col_right = st.columns([5, 1])
+                with save_col_left:
+                    st.caption(f"{place['place_name']} · {place['place_type']}")
+                with save_col_right:
+                    if st.button("Unsave", key=f"trip_unsave_{os_destination}_{place['place_name']}", use_container_width=True):
+                        delete_saved_place(os_destination, place["place_name"])
+                        st.rerun()
         st.markdown("#### Offline travel guide")
         offline_guide = travel_guide(os_destination, {**os_entities, "destination": os_destination})
         st.download_button("Download offline guide", data=offline_guide, file_name=f"{os_destination.replace(' ', '_')}_offline_guide.md", mime="text/markdown", key="os_offline_guide")
@@ -1014,18 +1158,12 @@ with tab_tools:
             st.markdown("### 🍽️ Food Recommendations")
             for food in food_recommendations(entities["destination"], entities.get("interests", [])):
                 st.markdown(f"- {food}")
-        st.markdown("### 📄 Save or Download")
+        st.markdown("### 📄 Download itinerary")
         if st.session_state.current_itinerary:
             pdf_bytes = itinerary_pdf(st.session_state.current_itinerary, f"{entities['destination']} Travel Itinerary")
-            download_col, save_col = st.columns(2)
-            with download_col:
-                st.download_button("📄 Download Itinerary as PDF", data=pdf_bytes, file_name=f"{entities['destination'].replace(' ', '_')}_itinerary.pdf", mime="application/pdf", use_container_width=True)
-            with save_col:
-                if st.button("❤️ Save / Favorite Trip", use_container_width=True):
-                    save_favorite(entities["destination"], int(entities["budget"]), int(entities["duration"]), st.session_state.current_itinerary)
-                    st.success("Trip saved to favorites.")
+            st.download_button("📄 Download Itinerary as PDF", data=pdf_bytes, file_name=f"{entities['destination'].replace(' ', '_')}_itinerary.pdf", mime="application/pdf", use_container_width=True)
         else:
-            st.info("Generate an itinerary first to enable PDF download and favorites.")
+            st.info("Generate an itinerary first to enable PDF download.")
             if st.button("🗺️ Generate itinerary now", type="primary", key="tools_generate_itinerary"):
                 context = format_context(retrieve(f"{entities['destination']} {' '.join(entities.get('interests', []))}"))
                 weather = get_weather(entities["destination"])
@@ -1033,17 +1171,11 @@ with tab_tools:
                 st.session_state.current_itinerary = itinerary
                 log_trip(entities["destination"], int(entities["budget"]), int(entities["duration"]), itinerary)
                 st.rerun()
-        favorites = favorite_rows()
-        if favorites:
-            st.markdown("### ❤️ Saved Favorite Trips")
-            for favorite in favorites[:5]:
-                st.markdown(f"<div class='metric'><b>{favorite['destination']}</b><br><span style='color:#aab5c7'>{favorite['duration_days']} days · PKR {favorite['total_budget']:,}</span></div>", unsafe_allow_html=True)
-
     with tab_hub:
         st.subheader("🧭 Hotels, Transport & Places")
         hub_entities = st.session_state.extracted_entities
         hub_destination = hub_entities.get("destination") or st.text_input("Choose a destination for travel tools", value="Lahore", key="hub_destination")
-        hub_view = st.radio("Open tool", ["⚖️ Compare Destinations", "🏨 Hotel Finder", "🚗 Transport Planner", "📍 Explore Nearby", "📄 Travel Guide", "❤️ My Trips", "📊 Trip Dashboard"], horizontal=True, label_visibility="collapsed", key="hub_view")
+        hub_view = st.radio("Open tool", ["⚖️ Compare Destinations", "🏨 Hotel Finder", "🚗 Transport Planner", "📍 Explore Nearby", "📄 Travel Guide"], horizontal=True, label_visibility="collapsed", key="hub_view")
 
         if hub_view == "⚖️ Compare Destinations":
             st.markdown("### ⚖️ Compare Destinations")
@@ -1180,51 +1312,6 @@ with tab_tools:
             guide = travel_guide(hub_destination, hub_entities)
             st.markdown(guide)
             st.download_button("📄 Download Travel Guide", data=guide, file_name=f"{hub_destination.replace(' ', '_')}_guide.md", mime="text/markdown", key="download_guide")
-
-        elif hub_view == "❤️ My Trips":
-            st.markdown("### ❤️ My Trips")
-            trips = favorite_rows()
-            if not trips:
-                st.info("No saved trips yet. Generate an itinerary and save it from Trip Tools.")
-            for trip in trips:
-                with st.expander(f"{trip['destination']} · {trip['duration_days']} days · PKR {trip['total_budget']:,}"):
-                    st.markdown(trip["itinerary_markdown"])
-
-        elif hub_view == "📊 Trip Dashboard":
-            st.markdown("### 📊 Trip Dashboard")
-            trips = favorite_rows()
-            if not trips:
-                st.info("No saved trips yet. Generate an itinerary and save it from Trip Tools to populate your dashboard.")
-            else:
-                destination_filter = st.selectbox("Filter by destination", ["All destinations"] + sorted({trip["destination"] for trip in trips}), key="dashboard_destination_filter")
-                filtered_trips = trips if destination_filter == "All destinations" else [trip for trip in trips if trip["destination"] == destination_filter]
-                total_budget = sum(float(trip["total_budget"]) for trip in filtered_trips)
-                average_budget = total_budget / len(filtered_trips)
-                average_days = sum(int(trip["duration_days"]) for trip in filtered_trips) / len(filtered_trips)
-                destination_counts = {}
-                for trip in filtered_trips:
-                    destination_counts[trip["destination"]] = destination_counts.get(trip["destination"], 0) + 1
-                top_destination = max(destination_counts, key=destination_counts.get)
-                dashboard_cols = st.columns(4)
-                dashboard_cols[0].metric("Saved trips", len(filtered_trips))
-                dashboard_cols[1].metric("Planned budget", f"PKR {total_budget:,.0f}")
-                dashboard_cols[2].metric("Average budget", f"PKR {average_budget:,.0f}")
-                dashboard_cols[3].metric("Average duration", f"{average_days:.1f} days")
-                st.markdown(f"#### Most planned destination: {top_destination}")
-                budget_by_destination = {}
-                for trip in filtered_trips:
-                    budget_by_destination[trip["destination"]] = budget_by_destination.get(trip["destination"], 0) + float(trip["total_budget"])
-                st.bar_chart(budget_by_destination, y_label="Budget (PKR)", color="#19a9e8")
-                st.markdown("#### Recent trip activity")
-                search = st.text_input("Search saved trips", placeholder="Destination name...", key="dashboard_trip_search").strip().casefold()
-                visible_trips = [trip for trip in filtered_trips if not search or search in trip["destination"].casefold()]
-                table_rows = [{"Destination": trip["destination"], "Days": int(trip["duration_days"]), "Budget (PKR)": float(trip["total_budget"]), "Created": trip["created_at"][:10]} for trip in visible_trips]
-                st.dataframe(table_rows, use_container_width=True, hide_index=True)
-                export_data = io.StringIO()
-                writer = csv.DictWriter(export_data, fieldnames=["Destination", "Days", "Budget (PKR)", "Created"])
-                writer.writeheader()
-                writer.writerows(table_rows)
-                st.download_button("📥 Export dashboard CSV", data=export_data.getvalue(), file_name="trip_dashboard.csv", mime="text/csv", use_container_width=True)
 
 """
 

@@ -25,7 +25,6 @@ def initialize_database() -> None:
         CREATE TABLE IF NOT EXISTS Hotels (id INTEGER PRIMARY KEY, destination_id INTEGER, name TEXT, price_per_night REAL, star_rating REAL);
         CREATE TABLE IF NOT EXISTS Activities (id INTEGER PRIMARY KEY, destination_id INTEGER, name TEXT, cost REAL, duration_hours REAL);
         CREATE TABLE IF NOT EXISTS Trips (id INTEGER PRIMARY KEY, user_id INTEGER, destination_id INTEGER, total_budget REAL, duration_days INTEGER, created_at TEXT, itinerary_markdown TEXT);
-        CREATE TABLE IF NOT EXISTS Favorites (id INTEGER PRIMARY KEY, destination TEXT, total_budget REAL, duration_days INTEGER, itinerary_markdown TEXT, created_at TEXT);
         CREATE TABLE IF NOT EXISTS TransportBookings (id INTEGER PRIMARY KEY, mode TEXT, origin TEXT, destination TEXT, trip_type TEXT, travelers INTEGER, estimated_cost REAL, pickup_location TEXT, travel_date TEXT, pickup_time TEXT, contact_name TEXT, contact_phone TEXT, status TEXT, created_at TEXT);
         CREATE TABLE IF NOT EXISTS Expenses (id INTEGER PRIMARY KEY, destination TEXT, category TEXT, description TEXT, amount REAL, paid_by TEXT, created_at TEXT);
         CREATE TABLE IF NOT EXISTS SavedPlaces (id INTEGER PRIMARY KEY, destination TEXT, place_name TEXT, place_type TEXT, notes TEXT, created_at TEXT, UNIQUE(destination, place_name));
@@ -59,18 +58,6 @@ def save_user_preferences(name: str, email: str, preferences: dict) -> None:
     initialize_database()
     with get_connection() as connection:
         connection.execute("INSERT OR REPLACE INTO Users(email, name, preferences_json, created_at) VALUES (?, ?, ?, ?)", (email, name, json.dumps(preferences), datetime.now(timezone.utc).isoformat()))
-
-
-def save_favorite(destination: str, budget: int, duration: int, itinerary: str) -> None:
-    initialize_database()
-    with get_connection() as connection:
-        connection.execute("INSERT INTO Favorites(destination, total_budget, duration_days, itinerary_markdown, created_at) VALUES (?, ?, ?, ?, ?)", (destination, budget, duration, itinerary, datetime.now(timezone.utc).isoformat()))
-
-
-def favorite_rows() -> list[dict]:
-    initialize_database()
-    with get_connection() as connection:
-        return [dict(row) for row in connection.execute("SELECT * FROM Favorites ORDER BY created_at DESC")]
 
 
 def save_transport_booking(booking: dict) -> str:
@@ -109,10 +96,34 @@ def expense_rows(destination: str | None = None) -> list[dict]:
         return [dict(row) for row in connection.execute(query + " ORDER BY created_at DESC", params)]
 
 
+def delete_expense(expense_id: int) -> None:
+    initialize_database()
+    with get_connection() as connection:
+        connection.execute("DELETE FROM Expenses WHERE id = ?", (expense_id,))
+
+
 def save_place(destination: str, place_name: str, place_type: str, notes: str = "") -> None:
     initialize_database()
     with get_connection() as connection:
         connection.execute("INSERT OR IGNORE INTO SavedPlaces(destination, place_name, place_type, notes, created_at) VALUES (?, ?, ?, ?, ?)", (destination, place_name, place_type, notes, datetime.now(timezone.utc).isoformat()))
+
+
+def delete_saved_place(destination: str, place_name: str) -> None:
+    initialize_database()
+    with get_connection() as connection:
+        connection.execute("DELETE FROM SavedPlaces WHERE destination = ? AND place_name = ?", (destination, place_name))
+
+
+def delete_document(destination: str, document_name: str) -> None:
+    initialize_database()
+    with get_connection() as connection:
+        connection.execute("DELETE FROM TravelDocuments WHERE destination = ? AND document_name = ?", (destination, document_name))
+
+
+def delete_reminder(destination: str, title: str) -> None:
+    initialize_database()
+    with get_connection() as connection:
+        connection.execute("DELETE FROM Reminders WHERE destination = ? AND title = ?", (destination, title))
 
 
 def saved_place_rows(destination: str | None = None) -> list[dict]:
